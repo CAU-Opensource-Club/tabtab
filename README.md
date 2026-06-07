@@ -2,7 +2,7 @@
 
 一个简单、轻量的 VSCode FIM 代码补全插件。
 
-相比 GitHub Copilot，**TabTab 去除了聊天等非必要功能**，仅保留核心的 **Tab 代码补全** 能力。
+相比 GitHub Copilot，**TabTab 去除了无用的聊天和Agent功能**，仅保留核心的 **Tab 代码补全** 能力。
 
 ## 使用注意事项
 
