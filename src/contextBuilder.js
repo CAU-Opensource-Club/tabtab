@@ -12,6 +12,7 @@ class ContextBuilder {
     const cursorOffset = document.offsetAt(position);
     const lines = text.split("\n");
     const cursorLine = lines[position.line] || "";
+    const cursorComment = detectCursorComment(text, cursorOffset);
     const prefixParts = {
       imports: collectTopImports(lines),
       scope: collectCurrentScope(lines, position.line),
@@ -42,6 +43,7 @@ class ContextBuilder {
         linePrefix: cursorLine.slice(0, position.character),
         lineSuffix: cursorLine.slice(position.character),
         indentation: getIndentation(cursorLine),
+        cursorComment,
         promptTokens: {
           prefix: budgeter.estimateTokens(prefix),
           suffix: budgeter.estimateTokens(suffix),
@@ -254,6 +256,97 @@ function getFileName(document) {
   }
 
   return document.uri.toString();
+}
+
+function detectCursorComment(text, cursorOffset) {
+  const end = Math.max(0, Math.min(cursorOffset, text.length));
+  let state = "code";
+  let escaped = false;
+  let commentKind = "";
+
+  for (let index = 0; index < end; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (state === "lineComment") {
+      if (char === "\n") {
+        state = "code";
+        commentKind = "";
+      }
+      continue;
+    }
+
+    if (state === "blockComment") {
+      if (char === "*" && next === "/") {
+        state = "code";
+        commentKind = "";
+        index += 1;
+      }
+      continue;
+    }
+
+    if (state === "singleQuote") {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "'" || char === "\n") {
+        state = "code";
+      }
+      continue;
+    }
+
+    if (state === "doubleQuote") {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"" || char === "\n") {
+        state = "code";
+      }
+      continue;
+    }
+
+    if (state === "templateString") {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "`") {
+        state = "code";
+      }
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      state = "lineComment";
+      commentKind = "line";
+      index += 1;
+    } else if (char === "/" && next === "*") {
+      state = "blockComment";
+      commentKind = "block";
+      index += 1;
+    } else if (char === "'") {
+      state = "singleQuote";
+      escaped = false;
+    } else if (char === "\"") {
+      state = "doubleQuote";
+      escaped = false;
+    } else if (char === "`") {
+      state = "templateString";
+      escaped = false;
+    }
+  }
+
+  return commentKind
+    ? {
+      inside: true,
+      kind: commentKind
+    }
+    : {
+      inside: false,
+      kind: ""
+    };
 }
 
 function normalizeText(text) {

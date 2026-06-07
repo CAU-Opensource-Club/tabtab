@@ -15,4 +15,5 @@ Rules:
 - For C++, prefer modern C++17/20 style, RAII, constexpr where useful, strong typing where appropriate, and avoid unnecessary dynamic allocation.
 - In hot-path or systems code, avoid hidden allocations, exceptions, virtual dispatch, locks, and excessive abstraction unless the surrounding code already uses them.
 - Preserve const-correctness, noexcept, alignment, and cache-conscious layout when relevant.
+- If the cursor is inside a comment, continue the comment text instead of writing code.
 - Complete only what is very likely intended from the immediate context.

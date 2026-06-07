@@ -12,6 +12,7 @@ class InlineCompletionProvider {
     this.readRuntimeConfig = options.readRuntimeConfig;
     this.lastError = "";
     this.activeRequest = undefined;
+    this.inlineSuggestTriggerTimer = undefined;
     this.relatedFileSelector = new RelatedFileSelector({
       vscode: this.vscode,
       context: this.context,
@@ -35,10 +36,23 @@ class InlineCompletionProvider {
             && event.document
             && this.activeRequest.documentUri === event.document.uri.toString()
           ) {
-            this.cancelActiveRequest();
+            if (this.isRemoteRequestInFlight(this.activeRequest)) {
+              this.activeRequest.retriggerAfterFinish = true;
+            } else {
+              this.cancelActiveRequest();
+            }
           }
         })
       );
+
+      this.context.subscriptions.push({
+        dispose: () => {
+          if (this.inlineSuggestTriggerTimer) {
+            clearTimeout(this.inlineSuggestTriggerTimer);
+            this.inlineSuggestTriggerTimer = undefined;
+          }
+        }
+      });
     }
   }
 
@@ -58,6 +72,11 @@ class InlineCompletionProvider {
       return token.isCancellationRequested ? undefined : sharedResult;
     }
 
+    if (this.activeRequest && this.shouldWaitForActiveRequest(this.activeRequest, config)) {
+      this.activeRequest.retriggerAfterFinish = true;
+      return undefined;
+    }
+
     if (this.activeRequest) {
       this.cancelActiveRequest();
     }
@@ -67,8 +86,12 @@ class InlineCompletionProvider {
       key: requestKey,
       documentUri: document.uri.toString(),
       documentVersion,
+      positionLine: position.line,
+      positionCharacter: position.character,
       controller,
-      promise: undefined
+      promise: undefined,
+      phase: "waiting",
+      retriggerAfterFinish: false
     };
     this.activeRequest = request;
     request.promise = this.runCompletionRequest({
@@ -95,6 +118,7 @@ class InlineCompletionProvider {
         return undefined;
       }
 
+      request.phase = "building";
       const runtimeConfig = await this.readRuntimeConfig();
       if (!runtimeConfig || !runtimeConfig.apiKey) {
         this.logError("Missing API key. Set apiKey in tabtab.config.json.");
@@ -112,6 +136,7 @@ class InlineCompletionProvider {
         return undefined;
       }
 
+      request.phase = "requesting";
       const rawCompletion = await withTimeout(
         this.fimClient.complete({
           runtimeConfig,
@@ -128,6 +153,7 @@ class InlineCompletionProvider {
         return undefined;
       }
 
+      request.phase = "processing";
       const completion = this.postProcessor.process({
         raw: rawCompletion,
         context: fimContext,
@@ -155,7 +181,11 @@ class InlineCompletionProvider {
       return undefined;
     } finally {
       if (this.activeRequest === request) {
+        const shouldRetrigger = request.retriggerAfterFinish && !request.controller.signal.aborted;
         this.activeRequest = undefined;
+        if (shouldRetrigger) {
+          this.scheduleInlineSuggestTrigger();
+        }
       }
     }
   }
@@ -179,8 +209,14 @@ class InlineCompletionProvider {
     }
 
     if (inlineContext.triggerKind === this.vscode.InlineCompletionTriggerKind.Automatic) {
-      const linePrefix = document.lineAt(position.line).text.slice(0, position.character);
+      const line = document.lineAt(position.line).text;
+      const linePrefix = line.slice(0, position.character);
+      const lineSuffix = line.slice(position.character);
       if (!linePrefix.trim()) {
+        return false;
+      }
+
+      if (looksLikeCompleteStatementEnd(linePrefix, lineSuffix)) {
         return false;
       }
     }
@@ -191,7 +227,25 @@ class InlineCompletionProvider {
   isStale(document, documentVersion, request) {
     return request.controller.signal.aborted
       || this.activeRequest !== request
-      || document.version !== documentVersion;
+      || document.version !== documentVersion
+      || this.hasCursorMoved(document, request);
+  }
+
+  hasCursorMoved(document, request) {
+    const editor = this.vscode.window.activeTextEditor;
+    return !editor
+      || editor.document.uri.toString() !== document.uri.toString()
+      || !editor.selection.isEmpty
+      || editor.selection.active.line !== request.positionLine
+      || editor.selection.active.character !== request.positionCharacter;
+  }
+
+  shouldWaitForActiveRequest(request, config) {
+    return this.isRemoteRequestInFlight(request) && !config.isManual;
+  }
+
+  isRemoteRequestInFlight(request) {
+    return request && request.phase === "requesting";
   }
 
   cancelActiveRequest() {
@@ -199,6 +253,21 @@ class InlineCompletionProvider {
       this.activeRequest.controller.abort();
       this.activeRequest = undefined;
     }
+  }
+
+  scheduleInlineSuggestTrigger() {
+    if (this.inlineSuggestTriggerTimer) {
+      return;
+    }
+
+    this.inlineSuggestTriggerTimer = setTimeout(() => {
+      this.inlineSuggestTriggerTimer = undefined;
+      if (this.vscode && this.vscode.commands && typeof this.vscode.commands.executeCommand === "function") {
+        this.vscode.commands.executeCommand("editor.action.inlineSuggest.trigger").catch((error) => {
+          this.logError(`Inline suggestion retrigger failed: ${error.message || String(error)}`);
+        });
+      }
+    }, 0);
   }
 
   logError(message) {
@@ -221,6 +290,35 @@ function makeRequestKey(document, position, documentVersion, config) {
     position.character,
     config.isManual ? "manual" : "auto"
   ].join(":");
+}
+
+function looksLikeCompleteStatementEnd(linePrefix, lineSuffix) {
+  const prefix = linePrefix.trimEnd();
+  return !lineSuffix.trim()
+    && prefix.endsWith(";")
+    && hasClosedGrouping(prefix);
+}
+
+function hasClosedGrouping(text) {
+  const counts = {
+    "(": 0,
+    "[": 0,
+    "{": 0
+  };
+
+  for (const char of text) {
+    if (char === "(" || char === "[" || char === "{") {
+      counts[char] += 1;
+    } else if (char === ")") {
+      counts["("] -= 1;
+    } else if (char === "]") {
+      counts["["] -= 1;
+    } else if (char === "}") {
+      counts["{"] -= 1;
+    }
+  }
+
+  return counts["("] <= 0 && counts["["] <= 0 && counts["{"] <= 0;
 }
 
 function createControllerToken(controller) {

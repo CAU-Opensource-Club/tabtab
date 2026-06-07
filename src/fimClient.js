@@ -130,6 +130,7 @@ function buildFimPrompt(context) {
   const extra = context.extraContext && context.extraContext.trim()
     ? ["<extra_context>", context.extraContext, "</extra_context>", ""]
     : [];
+  const cursorInstructions = buildCursorInstructions(metadata);
 
   return [
     `Language: ${metadata.languageId || "unknown"}`,
@@ -137,9 +138,10 @@ function buildFimPrompt(context) {
     `Cursor: line ${metadata.line || 0}, column ${metadata.character || 0}`,
     "",
     "Fill the cursor gap using FIM.",
-    "Return only the inserted code text.",
+    "Return only the inserted text.",
     "Do not return Markdown, explanations, tags, or code that already exists in prefix or suffix.",
     "Prefer a short local completion. The returned text will be inserted exactly at <cursor>.",
+    ...cursorInstructions,
     "",
     ...extra,
     "<fim_prefix>",
@@ -149,6 +151,23 @@ function buildFimPrompt(context) {
     context.suffix || "",
     "</fim_suffix>"
   ].join("\n");
+}
+
+function buildCursorInstructions(metadata) {
+  const cursorComment = metadata.cursorComment || {};
+  if (!cursorComment.inside) {
+    return [];
+  }
+
+  if (cursorComment.kind === "block") {
+    return [
+      "Cursor context: inside a block comment. Continue the comment text in the current comment style. Do not switch to code."
+    ];
+  }
+
+  return [
+    "Cursor context: inside a line comment. Continue the comment text in the current comment style. Do not switch to code."
+  ];
 }
 
 function normalizeProvider(value) {

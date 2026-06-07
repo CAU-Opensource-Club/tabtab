@@ -68,7 +68,7 @@
         },
         "tabtab.debounceMs": {
           "type": "number",
-          "default": 250,
+          "default": 800,
           "minimum": 0,
           "maximum": 2000,
           "description": "Debounce delay for automatic inline completions in milliseconds."

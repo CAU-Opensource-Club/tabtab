@@ -1,5 +1,5 @@
 const DEFAULT_COMPLETION_CONFIG = {
-  debounceMs: 250,
+  debounceMs: 800,
   maxPromptTokens: 8192,
   maxOutputTokens: 128,
   manualMaxOutputTokens: 256,
