@@ -10,6 +10,9 @@ const DEFAULT_COMPLETION_CONFIG = {
   maxRelatedFiles: 6,
   maxRelatedFileBytes: 256 * 1024,
   lspTimeoutMs: 250,
+  idleTriggerEnabled: true,
+  idleTriggerMs: 1500,
+  idleTriggerCooldownMs: 3000,
   sendThinkingDisabled: true
 };
 
@@ -43,6 +46,9 @@ class Config {
       maxRelatedFiles: getNumber(workspaceConfig, "maxRelatedFiles", DEFAULT_COMPLETION_CONFIG.maxRelatedFiles),
       maxRelatedFileBytes: getNumber(workspaceConfig, "maxRelatedFileBytes", DEFAULT_COMPLETION_CONFIG.maxRelatedFileBytes),
       lspTimeoutMs: getNumber(workspaceConfig, "lspTimeoutMs", DEFAULT_COMPLETION_CONFIG.lspTimeoutMs),
+      idleTriggerEnabled: getBoolean(workspaceConfig, "idleTriggerEnabled", DEFAULT_COMPLETION_CONFIG.idleTriggerEnabled),
+      idleTriggerMs: getNumber(workspaceConfig, "idleTriggerMs", DEFAULT_COMPLETION_CONFIG.idleTriggerMs),
+      idleTriggerCooldownMs: getNumber(workspaceConfig, "idleTriggerCooldownMs", DEFAULT_COMPLETION_CONFIG.idleTriggerCooldownMs),
       sendThinkingDisabled: getBoolean(workspaceConfig, "sendThinkingDisabled", DEFAULT_COMPLETION_CONFIG.sendThinkingDisabled)
     });
   }

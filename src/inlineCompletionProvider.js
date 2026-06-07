@@ -4,6 +4,9 @@ const { RelatedFileSelector } = require("./relatedFileSelector");
 const { FimClient } = require("./fimClient");
 const { CompletionPostProcessor } = require("./completionPostProcessor");
 
+const INLINE_SUGGEST_TRIGGER_COMMAND = "editor.action.inlineSuggest.trigger";
+const IDLE_TRIGGER_PENDING_MS = 2000;
+
 class InlineCompletionProvider {
   constructor(options) {
     this.vscode = options.vscode;
@@ -13,6 +16,10 @@ class InlineCompletionProvider {
     this.lastError = "";
     this.activeRequest = undefined;
     this.inlineSuggestTriggerTimer = undefined;
+    this.idleTriggerTimer = undefined;
+    this.idleTriggerSnapshot = undefined;
+    this.pendingIdleTriggerSnapshot = undefined;
+    this.lastIdleTriggerAt = 0;
     this.relatedFileSelector = new RelatedFileSelector({
       vscode: this.vscode,
       context: this.context,
@@ -42,6 +49,22 @@ class InlineCompletionProvider {
               this.cancelActiveRequest();
             }
           }
+
+          const editor = this.vscode.window.activeTextEditor;
+          if (editor && event.document && editor.document.uri.toString() === event.document.uri.toString()) {
+            this.scheduleIdleTriggerForActiveEditor();
+          }
+        })
+      );
+
+      this.context.subscriptions.push(
+        this.vscode.window.onDidChangeTextEditorSelection((event) => {
+          if (event.textEditor === this.vscode.window.activeTextEditor) {
+            this.scheduleIdleTriggerForActiveEditor();
+          }
+        }),
+        this.vscode.window.onDidChangeActiveTextEditor(() => {
+          this.scheduleIdleTriggerForActiveEditor();
         })
       );
 
@@ -51,16 +74,25 @@ class InlineCompletionProvider {
             clearTimeout(this.inlineSuggestTriggerTimer);
             this.inlineSuggestTriggerTimer = undefined;
           }
+          this.clearIdleTrigger();
+          this.pendingIdleTriggerSnapshot = undefined;
         }
       });
+
+      this.scheduleIdleTriggerForActiveEditor();
     }
   }
 
   async provideInlineCompletionItems(document, position, inlineContext, token) {
+    const idleTriggered = this.takeMatchingIdleTriggerSnapshot(document, position);
+    const effectiveInlineContext = idleTriggered
+      ? { triggerKind: this.vscode.InlineCompletionTriggerKind.Automatic }
+      : inlineContext;
     const workspaceConfig = this.vscode.workspace.getConfiguration("tabtab");
-    const config = Config.fromWorkspace(workspaceConfig, inlineContext, this.vscode);
+    const config = Config.fromWorkspace(workspaceConfig, effectiveInlineContext, this.vscode);
+    config.skipDebounce = idleTriggered;
 
-    if (!this.canProvide(document, position, inlineContext, token, config)) {
+    if (!this.canProvide(document, position, effectiveInlineContext, token, config)) {
       return undefined;
     }
 
@@ -110,7 +142,7 @@ class InlineCompletionProvider {
   async runCompletionRequest({ document, position, config, documentVersion, request, controller }) {
     const requestToken = createControllerToken(controller);
     try {
-      if (!config.isManual) {
+      if (!config.isManual && !config.skipDebounce) {
         await delay(config.debounceMs, requestToken, controller.signal);
       }
 
@@ -262,12 +294,121 @@ class InlineCompletionProvider {
 
     this.inlineSuggestTriggerTimer = setTimeout(() => {
       this.inlineSuggestTriggerTimer = undefined;
-      if (this.vscode && this.vscode.commands && typeof this.vscode.commands.executeCommand === "function") {
-        this.vscode.commands.executeCommand("editor.action.inlineSuggest.trigger").catch((error) => {
-          this.logError(`Inline suggestion retrigger failed: ${error.message || String(error)}`);
-        });
-      }
+      this.executeInlineSuggestTrigger("Inline suggestion retrigger failed");
     }, 0);
+  }
+
+  scheduleIdleTriggerForActiveEditor() {
+    const editor = this.vscode.window.activeTextEditor;
+    const config = this.readAutomaticConfig();
+    if (
+      !config.enabled
+      || !config.idleTriggerEnabled
+      || config.idleTriggerMs <= 0
+      || !this.canIdleTrigger(editor, config)
+    ) {
+      this.clearIdleTrigger();
+      return;
+    }
+
+    const now = Date.now();
+    const cooldownRemaining = Math.max(0, config.idleTriggerCooldownMs - (now - this.lastIdleTriggerAt));
+    const delayMs = Math.max(config.idleTriggerMs, cooldownRemaining);
+    this.idleTriggerSnapshot = makeEditorSnapshot(editor);
+
+    if (this.idleTriggerTimer) {
+      clearTimeout(this.idleTriggerTimer);
+    }
+
+    this.idleTriggerTimer = setTimeout(() => {
+      const snapshot = this.idleTriggerSnapshot;
+      this.idleTriggerTimer = undefined;
+      this.idleTriggerSnapshot = undefined;
+      this.runIdleTrigger(snapshot);
+    }, delayMs);
+  }
+
+  runIdleTrigger(snapshot) {
+    const editor = this.vscode.window.activeTextEditor;
+    const config = this.readAutomaticConfig();
+    if (
+      !config.enabled
+      || !config.idleTriggerEnabled
+      || !snapshot
+      || !this.matchesEditorSnapshot(editor, snapshot)
+      || !this.canIdleTrigger(editor, config)
+    ) {
+      return;
+    }
+
+    this.lastIdleTriggerAt = Date.now();
+    this.pendingIdleTriggerSnapshot = snapshot;
+    setTimeout(() => {
+      if (this.pendingIdleTriggerSnapshot === snapshot) {
+        this.pendingIdleTriggerSnapshot = undefined;
+      }
+    }, IDLE_TRIGGER_PENDING_MS);
+    this.executeInlineSuggestTrigger();
+  }
+
+  canIdleTrigger(editor, config) {
+    if (!editor || this.activeRequest) {
+      return false;
+    }
+
+    return this.canProvide(
+      editor.document,
+      editor.selection.active,
+      { triggerKind: this.vscode.InlineCompletionTriggerKind.Automatic },
+      { isCancellationRequested: false },
+      config
+    );
+  }
+
+  matchesEditorSnapshot(editor, snapshot) {
+    return editor
+      && editor.document.uri.toString() === snapshot.documentUri
+      && editor.document.version === snapshot.documentVersion
+      && editor.selection.isEmpty
+      && editor.selection.active.line === snapshot.positionLine
+      && editor.selection.active.character === snapshot.positionCharacter;
+  }
+
+  clearIdleTrigger() {
+    if (this.idleTriggerTimer) {
+      clearTimeout(this.idleTriggerTimer);
+      this.idleTriggerTimer = undefined;
+    }
+    this.idleTriggerSnapshot = undefined;
+  }
+
+  takeMatchingIdleTriggerSnapshot(document, position) {
+    const snapshot = this.pendingIdleTriggerSnapshot;
+    if (!snapshot) {
+      return false;
+    }
+
+    this.pendingIdleTriggerSnapshot = undefined;
+    return document.uri.toString() === snapshot.documentUri
+      && document.version === snapshot.documentVersion
+      && position.line === snapshot.positionLine
+      && position.character === snapshot.positionCharacter;
+  }
+
+  readAutomaticConfig() {
+    return Config.fromWorkspace(
+      this.vscode.workspace.getConfiguration("tabtab"),
+      { triggerKind: this.vscode.InlineCompletionTriggerKind.Automatic },
+      this.vscode
+    );
+  }
+
+  executeInlineSuggestTrigger(errorPrefix = "Inline suggestion trigger failed") {
+    if (this.vscode && this.vscode.commands && typeof this.vscode.commands.executeCommand === "function") {
+      this.vscode.commands.executeCommand(INLINE_SUGGEST_TRIGGER_COMMAND).catch((error) => {
+        this.logError(`${errorPrefix}: ${error.message || String(error)}`);
+      });
+    }
   }
 
   logError(message) {
@@ -290,6 +431,15 @@ function makeRequestKey(document, position, documentVersion, config) {
     position.character,
     config.isManual ? "manual" : "auto"
   ].join(":");
+}
+
+function makeEditorSnapshot(editor) {
+  return {
+    documentUri: editor.document.uri.toString(),
+    documentVersion: editor.document.version,
+    positionLine: editor.selection.active.line,
+    positionCharacter: editor.selection.active.character
+  };
 }
 
 function looksLikeCompleteStatementEnd(linePrefix, lineSuffix) {

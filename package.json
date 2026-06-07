@@ -136,6 +136,25 @@
           "maximum": 2000,
           "description": "Timeout for definition/declaration context lookup in milliseconds."
         },
+        "tabtab.idleTriggerEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Trigger an automatic inline completion after the cursor and document stay idle."
+        },
+        "tabtab.idleTriggerMs": {
+          "type": "number",
+          "default": 1500,
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "Idle delay before triggering an automatic inline completion in milliseconds."
+        },
+        "tabtab.idleTriggerCooldownMs": {
+          "type": "number",
+          "default": 3000,
+          "minimum": 0,
+          "maximum": 30000,
+          "description": "Minimum time between idle-triggered inline completion attempts in milliseconds."
+        },
         "tabtab.sendThinkingDisabled": {
           "type": "boolean",
           "default": true,
