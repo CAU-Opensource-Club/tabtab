@@ -1,0 +1,154 @@
+{
+  "name": "tabtab",
+  "displayName": "TabTab",
+  "description": "Minimal inline code completion for OpenAI-compatible and Anthropic-compatible APIs.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:tabtab.setApiKey",
+    "onCommand:tabtab.clearApiKey",
+    "onCommand:tabtab.testApi",
+    "onView:tabtab.settingsView",
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "tabtab.setApiKey",
+        "title": "TabTab: Set API Key"
+      },
+      {
+        "command": "tabtab.clearApiKey",
+        "title": "TabTab: Clear API Key"
+      },
+      {
+        "command": "tabtab.testApi",
+        "title": "TabTab: Test API"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tabtab",
+          "title": "TabTab",
+          "icon": "tabtab-transparent.png"
+        }
+      ]
+    },
+    "views": {
+      "tabtab": [
+        {
+          "id": "tabtab.settingsView",
+          "name": "Settings",
+          "type": "webview"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "TabTab",
+      "properties": {
+        "tabtab.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable TabTab inline code completion."
+        },
+        "tabtab.maxTokens": {
+          "type": "number",
+          "default": 128,
+          "minimum": 16,
+          "maximum": 512,
+          "description": "Legacy alias for tabtab.maxOutputTokens when maxOutputTokens is not set."
+        },
+        "tabtab.debounceMs": {
+          "type": "number",
+          "default": 250,
+          "minimum": 0,
+          "maximum": 2000,
+          "description": "Debounce delay for automatic inline completions in milliseconds."
+        },
+        "tabtab.maxPromptTokens": {
+          "type": "number",
+          "default": 8192,
+          "minimum": 1024,
+          "maximum": 32768,
+          "description": "Maximum approximate prompt tokens. Budget is split as prefix 65%, suffix 20%, extra context 15%."
+        },
+        "tabtab.maxOutputTokens": {
+          "type": "number",
+          "default": 128,
+          "minimum": 16,
+          "maximum": 512,
+          "description": "Maximum tokens generated for automatic inline completions."
+        },
+        "tabtab.manualMaxOutputTokens": {
+          "type": "number",
+          "default": 256,
+          "minimum": 16,
+          "maximum": 1024,
+          "description": "Maximum tokens generated for manually invoked inline completions."
+        },
+        "tabtab.temperature": {
+          "type": "number",
+          "default": 0.1,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Sampling temperature used for completions."
+        },
+        "tabtab.maxCompletionLines": {
+          "type": "number",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 32,
+          "description": "Maximum number of lines returned for automatic inline completions."
+        },
+        "tabtab.manualMaxCompletionLines": {
+          "type": "number",
+          "default": 24,
+          "minimum": 1,
+          "maximum": 80,
+          "description": "Maximum number of lines returned for manually invoked inline completions."
+        },
+        "tabtab.maxRelatedFiles": {
+          "type": "number",
+          "default": 6,
+          "minimum": 0,
+          "maximum": 20,
+          "description": "Maximum related files or LSP snippets included as extra context."
+        },
+        "tabtab.maxRelatedFileBytes": {
+          "type": "number",
+          "default": 262144,
+          "minimum": 16384,
+          "maximum": 1048576,
+          "description": "Maximum size in bytes for a related file considered as extra context."
+        },
+        "tabtab.lspTimeoutMs": {
+          "type": "number",
+          "default": 250,
+          "minimum": 0,
+          "maximum": 2000,
+          "description": "Timeout for definition/declaration context lookup in milliseconds."
+        },
+        "tabtab.sendThinkingDisabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Send thinking disabled on OpenAI-compatible completion requests when supported by the API."
+        },
+        "tabtab.requestTimeoutMs": {
+          "type": "number",
+          "default": 8000,
+          "minimum": 1000,
+          "maximum": 30000,
+          "description": "Timeout for each API request in milliseconds."
+        }
+      }
+    }
+  }
+}
