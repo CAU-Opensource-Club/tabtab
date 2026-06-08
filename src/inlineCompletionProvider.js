@@ -3,6 +3,7 @@ const { ContextBuilder } = require("./contextBuilder");
 const { RelatedFileSelector } = require("./relatedFileSelector");
 const { FimClient } = require("./fimClient");
 const { CompletionPostProcessor } = require("./completionPostProcessor");
+const { looksLikeCompleteStatementEnd } = require("./completionContextRules");
 
 const INLINE_SUGGEST_TRIGGER_COMMAND = "editor.action.inlineSuggest.trigger";
 const IDLE_TRIGGER_PENDING_MS = 2000;
@@ -440,35 +441,6 @@ function makeEditorSnapshot(editor) {
     positionLine: editor.selection.active.line,
     positionCharacter: editor.selection.active.character
   };
-}
-
-function looksLikeCompleteStatementEnd(linePrefix, lineSuffix) {
-  const prefix = linePrefix.trimEnd();
-  return !lineSuffix.trim()
-    && prefix.endsWith(";")
-    && hasClosedGrouping(prefix);
-}
-
-function hasClosedGrouping(text) {
-  const counts = {
-    "(": 0,
-    "[": 0,
-    "{": 0
-  };
-
-  for (const char of text) {
-    if (char === "(" || char === "[" || char === "{") {
-      counts[char] += 1;
-    } else if (char === ")") {
-      counts["("] -= 1;
-    } else if (char === "]") {
-      counts["["] -= 1;
-    } else if (char === "}") {
-      counts["{"] -= 1;
-    }
-  }
-
-  return counts["("] <= 0 && counts["["] <= 0 && counts["{"] <= 0;
 }
 
 function createControllerToken(controller) {

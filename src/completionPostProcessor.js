@@ -1,3 +1,5 @@
+const { looksLikeCompleteStatementEnd } = require("./completionContextRules");
+
 class CompletionPostProcessor {
   process({ raw, context, config }) {
     if (!raw || typeof raw !== "string") {
@@ -14,6 +16,7 @@ class CompletionPostProcessor {
     completion = stripSuffixDuplication(completion, context.suffix || "", metadata.lineSuffix || "");
     completion = trimToLineLimit(completion, config.maxCompletionLines);
     completion = alignIndentation(completion, metadata.indentation || "", metadata.linePrefix || "");
+    completion = insertStatementBoundaryNewline(completion, metadata);
     completion = completion.replace(/[ \t]+$/gm, "").slice(0, Math.max(512, config.maxOutputTokens * 16));
 
     if (!completion.trim()) {
@@ -170,6 +173,20 @@ function alignIndentation(text, indentation, linePrefix) {
       return `${currentIndent}${line}`;
     })
     .join("\n");
+}
+
+function insertStatementBoundaryNewline(text, metadata) {
+  const completion = String(text || "");
+
+  if (!completion || /^\s*\n/.test(completion)) {
+    return completion;
+  }
+
+  if (!looksLikeCompleteStatementEnd(metadata.linePrefix || "", metadata.lineSuffix || "")) {
+    return completion;
+  }
+
+  return `\n${metadata.indentation || ""}${completion.trimStart()}`;
 }
 
 function longestOverlap(left, right, maxLength) {
