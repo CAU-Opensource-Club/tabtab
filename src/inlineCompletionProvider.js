@@ -14,6 +14,7 @@ class InlineCompletionProvider {
     this.context = options.context;
     this.output = options.output;
     this.readRuntimeConfig = options.readRuntimeConfig;
+    this.projectProfileService = options.projectProfileService;
     this.lastError = "";
     this.activeRequest = undefined;
     this.inlineSuggestTriggerTimer = undefined;
@@ -164,6 +165,12 @@ class InlineCompletionProvider {
         token: requestToken,
         config
       });
+      const projectProfile = this.projectProfileService
+        ? this.projectProfileService.getPromptProfile(document)
+        : "";
+      if (projectProfile) {
+        fimContext.projectProfile = projectProfile;
+      }
 
       if (this.isStale(document, documentVersion, request)) {
         return undefined;
