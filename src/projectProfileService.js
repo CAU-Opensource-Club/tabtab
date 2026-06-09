@@ -13,7 +13,7 @@ const DEFAULT_MAX_FILES = 2000;
 const DEFAULT_MAX_CHARS = 12000;
 const PROJECT_PROFILE_DETECTOR_VERSION = 4;
 const DEFAULT_PROJECT_PROFILE_CONFIG = {
-  enabled: false,
+  enabled: true,
   manualProfile: "",
   showInStatusBar: true,
   maxFiles: DEFAULT_MAX_FILES,

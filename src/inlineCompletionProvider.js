@@ -14,7 +14,7 @@ class InlineCompletionProvider {
     this.context = options.context;
     this.output = options.output;
     this.readRuntimeConfig = options.readRuntimeConfig;
-    this.projectProfileService = options.projectProfileService;
+    this.workspaceContextCache = options.workspaceContextCache;
     this.lastError = "";
     this.activeRequest = undefined;
     this.inlineSuggestTriggerTimer = undefined;
@@ -159,18 +159,20 @@ class InlineCompletionProvider {
         return undefined;
       }
 
-      const fimContext = await this.contextBuilder.build({
-        document,
-        position,
-        token: requestToken,
-        config
-      });
-      const projectProfile = this.projectProfileService
-        ? this.projectProfileService.getPromptProfile(document)
-        : "";
-      if (projectProfile) {
-        fimContext.projectProfile = projectProfile;
-      }
+      const [fimContext, workspaceSnapshot] = await Promise.all([
+        this.contextBuilder.build({
+          document,
+          position,
+          token: requestToken,
+          config
+        }),
+        this.workspaceContextCache
+          ? this.workspaceContextCache.buildSnapshot(document, position, requestToken)
+          : Promise.resolve({ promptSections: [] })
+      ]);
+      fimContext.cachedContextSections = workspaceSnapshot && Array.isArray(workspaceSnapshot.promptSections)
+        ? workspaceSnapshot.promptSections
+        : [];
 
       if (this.isStale(document, documentVersion, request)) {
         return undefined;

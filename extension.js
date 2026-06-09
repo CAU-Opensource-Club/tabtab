@@ -2,6 +2,7 @@ const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
 const { InlineCompletionProvider } = require("./src/inlineCompletionProvider");
+const { WorkspaceContextCache } = require("./src/context/workspaceContextCache");
 const { ProjectProfileService, normalizeProjectProfileConfig } = require("./src/projectProfileService");
 
 const SECRET_KEY = "tabtab.deepseekApiKey";
@@ -49,13 +50,19 @@ async function activate(context) {
       return config.projectProfile;
     }
   });
+  const workspaceContextCache = new WorkspaceContextCache({
+    vscode,
+    context,
+    output,
+    projectProfileService
+  });
 
   const provider = new InlineCompletionProvider({
     vscode,
     context,
     output,
     readRuntimeConfig: () => readTabTabConfig(context),
-    projectProfileService,
+    workspaceContextCache,
     defaults: {
       defaultBaseUrl: DEFAULT_BASE_URL,
       defaultAnthropicBaseUrl: DEFAULT_ANTHROPIC_BASE_URL,
@@ -97,6 +104,9 @@ async function activate(context) {
   );
 
   projectProfileService.start();
+  workspaceContextCache.initialize().catch((error) => {
+    output.appendLine(`Workspace context cache initialization failed: ${error.message || String(error)}`);
+  });
   output.appendLine(`TabTab activated. provider=${getProviderLabel(initialConfig.provider)} baseUrl=${initialConfig.baseUrl} model=${initialConfig.model} apiKey=${initialConfig.apiKey ? "set" : "missing"}`);
 }
 
@@ -822,7 +832,7 @@ function getProjectProfileConfig(config, workspaceConfig) {
   return normalizeProjectProfileConfig({
     enabled: typeof source.enabled === "boolean"
       ? source.enabled
-      : workspaceConfig.get("projectProfile.enabled", false),
+      : workspaceConfig.get("projectProfile.enabled", true),
     manualProfile: typeof source.manualProfile === "string"
       ? source.manualProfile
       : workspaceConfig.get("projectProfile.manualProfile", ""),

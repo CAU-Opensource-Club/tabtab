@@ -127,6 +127,9 @@ class FimClient {
 
 function buildFimPrompt(context) {
   const metadata = context.metadata || {};
+  const cachedContextSections = Array.isArray(context.cachedContextSections)
+    ? context.cachedContextSections.map((section) => String(section || "").trim()).filter(Boolean)
+    : [];
   const extra = context.extraContext && context.extraContext.trim()
     ? ["<extra_context>", context.extraContext, "</extra_context>", ""]
     : [];
@@ -146,6 +149,7 @@ function buildFimPrompt(context) {
     "Prefer a short local completion. The returned text will be inserted exactly at <cursor>.",
     ...cursorInstructions,
     "",
+    ...formatCachedContextSections(cachedContextSections),
     ...extra,
     "<fim_prefix>",
     context.prefix || "",
@@ -154,6 +158,19 @@ function buildFimPrompt(context) {
     context.suffix || "",
     "</fim_suffix>"
   ].join("\n");
+}
+
+function formatCachedContextSections(sections) {
+  if (!sections.length) {
+    return [];
+  }
+
+  return [
+    "<workspace_context>",
+    sections.join("\n\n"),
+    "</workspace_context>",
+    ""
+  ];
 }
 
 function buildCursorInstructions(metadata) {

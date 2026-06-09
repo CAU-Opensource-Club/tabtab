@@ -4,6 +4,9 @@
   "description": "Minimal inline code completion for OpenAI-compatible and Anthropic-compatible APIs.",
   "version": "0.0.1",
   "publisher": "local",
+  "scripts": {
+    "test": "node test/contextCache.test.js"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -184,8 +187,56 @@
         },
         "tabtab.projectProfile.enabled": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Enable project profile detection and inject the detected project profile into FIM prompts."
+        },
+        "tabtab.contextCache.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable workspace context cache for FIM completions."
+        },
+        "tabtab.includeAssist.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable missing include hints from VSCode diagnostics."
+        },
+        "tabtab.includeAssist.standardLibrary.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable missing C/C++ standard library include hints."
+        },
+        "tabtab.includeAssist.projectHeaders.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable missing project-local header include hints."
+        },
+        "tabtab.localHeaderIndex.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable background local header symbol indexing."
+        },
+        "tabtab.localHeaderIndex.excludeGlobs": {
+          "type": "array",
+          "default": [
+            "**/build/**",
+            "**/cmake-build-*/**",
+            "**/.git/**",
+            "**/node_modules/**",
+            "**/third_party/**",
+            "**/external/**",
+            "**/vendor/**"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Glob patterns excluded from local header indexing."
+        },
+        "tabtab.contextCache.maxInjectedChars": {
+          "type": "number",
+          "default": 1200,
+          "minimum": 200,
+          "maximum": 8000,
+          "description": "Maximum number of characters injected from workspace context cache."
         },
         "tabtab.projectProfile.manualProfile": {
           "type": "string",
