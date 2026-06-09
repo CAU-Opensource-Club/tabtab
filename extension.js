@@ -2,6 +2,7 @@ const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
 const { InlineCompletionProvider } = require("./src/inlineCompletionProvider");
+const { ProjectProfileService } = require("./src/projectProfileService");
 
 const SECRET_KEY = "tabtab.deepseekApiKey";
 const CONFIG_FILE_NAME = "tabtab.config.json";
@@ -36,12 +37,18 @@ let output;
 async function activate(context) {
   output = vscode.window.createOutputChannel("TabTab");
   const initialConfig = await ensureConfigFile(context);
+  const projectProfileService = new ProjectProfileService({
+    vscode,
+    context,
+    output
+  });
 
   const provider = new InlineCompletionProvider({
     vscode,
     context,
     output,
     readRuntimeConfig: () => readTabTabConfig(context),
+    projectProfileService,
     defaults: {
       defaultBaseUrl: DEFAULT_BASE_URL,
       defaultAnthropicBaseUrl: DEFAULT_ANTHROPIC_BASE_URL,
@@ -70,9 +77,19 @@ async function activate(context) {
     }),
     vscode.commands.registerCommand("tabtab.testApi", async () => {
       await testApiConnection(context);
+    }),
+    vscode.commands.registerCommand("tabtab.projectProfile.detect", async () => {
+      await projectProfileService.detectActiveWorkspace({ force: true, showSuccess: true });
+    }),
+    vscode.commands.registerCommand("tabtab.projectProfile.edit", async () => {
+      await projectProfileService.editActiveProfile();
+    }),
+    vscode.commands.registerCommand("tabtab.projectProfile.clear", async () => {
+      await projectProfileService.clearActiveWorkspaceCache();
     })
   );
 
+  projectProfileService.start();
   output.appendLine(`TabTab activated. provider=${getProviderLabel(initialConfig.provider)} baseUrl=${initialConfig.baseUrl} model=${initialConfig.model} apiKey=${initialConfig.apiKey ? "set" : "missing"}`);
 }
 

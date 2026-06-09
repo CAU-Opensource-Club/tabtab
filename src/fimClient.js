@@ -131,11 +131,14 @@ function buildFimPrompt(context) {
     ? ["<extra_context>", context.extraContext, "</extra_context>", ""]
     : [];
   const cursorInstructions = buildCursorInstructions(metadata);
+  const projectProfile = sanitizeProjectProfile(context.projectProfile);
+  const projectProfileLines = projectProfile ? [`Project profile: ${projectProfile}`] : [];
 
   return [
     `Language: ${metadata.languageId || "unknown"}`,
     `File: ${metadata.fileName || "unknown"}`,
     `Cursor: line ${metadata.line || 0}, column ${metadata.character || 0}`,
+    ...projectProfileLines,
     "",
     "Fill the cursor gap using FIM.",
     "Return only the inserted text.",
@@ -168,6 +171,14 @@ function buildCursorInstructions(metadata) {
   return [
     "Cursor context: inside a line comment. Continue the comment text in the current comment style. Do not switch to code."
   ];
+}
+
+function sanitizeProjectProfile(value) {
+  return String(value || "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200);
 }
 
 function normalizeProvider(value) {

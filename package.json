@@ -14,6 +14,9 @@
     "onCommand:tabtab.setApiKey",
     "onCommand:tabtab.clearApiKey",
     "onCommand:tabtab.testApi",
+    "onCommand:tabtab.projectProfile.detect",
+    "onCommand:tabtab.projectProfile.edit",
+    "onCommand:tabtab.projectProfile.clear",
     "onView:tabtab.settingsView",
     "onStartupFinished"
   ],
@@ -31,6 +34,18 @@
       {
         "command": "tabtab.testApi",
         "title": "TabTab: Test API"
+      },
+      {
+        "command": "tabtab.projectProfile.detect",
+        "title": "TabTab: Detect Project Profile"
+      },
+      {
+        "command": "tabtab.projectProfile.edit",
+        "title": "TabTab: Edit Project Profile"
+      },
+      {
+        "command": "tabtab.projectProfile.clear",
+        "title": "TabTab: Clear Project Profile Cache"
       }
     ],
     "viewsContainers": {
@@ -166,6 +181,33 @@
           "minimum": 1000,
           "maximum": 30000,
           "description": "Timeout for each API request in milliseconds."
+        },
+        "tabtab.projectProfile.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable project profile detection and inject the detected project profile into FIM prompts."
+        },
+        "tabtab.projectProfile.manualProfile": {
+          "type": "string",
+          "default": "",
+          "description": "Manually override the detected project profile. If non-empty, this value is used instead of auto-detected profile."
+        },
+        "tabtab.projectProfile.showInStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the current project profile in the VSCode status bar."
+        },
+        "tabtab.projectProfile.maxFiles": {
+          "type": "number",
+          "default": 2000,
+          "minimum": 1,
+          "description": "Maximum number of project files used for project profile detection."
+        },
+        "tabtab.projectProfile.maxChars": {
+          "type": "number",
+          "default": 12000,
+          "minimum": 1,
+          "description": "Maximum number of characters from the project structure passed to project profile detection."
         }
       }
     }
