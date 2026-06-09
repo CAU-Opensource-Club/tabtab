@@ -14,6 +14,7 @@ class CompletionPostProcessor {
     completion = stripSpecialTokens(completion);
     completion = stripPrefixDuplication(completion, context.prefix || "", metadata.linePrefix || "");
     completion = stripSuffixDuplication(completion, context.suffix || "", metadata.lineSuffix || "");
+    completion = stripContextBlockDuplication(completion, context.prefix || "", context.suffix || "", metadata.lineSuffix || "");
     completion = trimToLineLimit(completion, config.maxCompletionLines);
     completion = alignIndentation(completion, metadata.indentation || "", metadata.linePrefix || "");
     completion = insertStatementBoundaryNewline(completion, metadata);
@@ -130,6 +131,140 @@ function stripSuffixDuplication(text, suffix, lineSuffix) {
   }
 
   return completion;
+}
+
+function stripContextBlockDuplication(text, prefix, suffix, lineSuffix) {
+  let completion = stripRepeatedPrefixBlock(text, prefix);
+  completion = truncateAtRepeatedSuffixBlock(completion, [lineSuffix || "", suffix || ""].filter(Boolean).join("\n"));
+
+  if (isExistingContextBlock(completion, prefix, suffix)) {
+    return "";
+  }
+
+  return completion;
+}
+
+function stripRepeatedPrefixBlock(text, prefix) {
+  const completionLines = significantLineRecords(text);
+  const prefixLines = significantLineRecords(tail(prefix, 8000)).slice(-120);
+  const maxLength = Math.min(6, completionLines.length, prefixLines.length);
+
+  for (let length = maxLength; length > 0; length -= 1) {
+    const candidate = completionLines.slice(0, length);
+    if (!isUsefulContextBlock(candidate)) {
+      continue;
+    }
+
+    if (findLineWindow(prefixLines, candidate) >= 0) {
+      return text.slice(candidate[candidate.length - 1].nextStart).replace(/^\n+/, "");
+    }
+  }
+
+  return text;
+}
+
+function truncateAtRepeatedSuffixBlock(text, suffix) {
+  const completionLines = significantLineRecords(text);
+  const suffixLines = significantLineRecords(head(suffix, 8000)).slice(0, 120);
+  let cutOffset = undefined;
+
+  for (let start = 0; start < Math.min(3, suffixLines.length); start += 1) {
+    const maxLength = Math.min(6, suffixLines.length - start);
+
+    for (let length = maxLength; length > 0; length -= 1) {
+      const candidate = suffixLines.slice(start, start + length);
+      if (!isUsefulContextBlock(candidate)) {
+        continue;
+      }
+
+      const matchIndex = findLineWindow(completionLines, candidate);
+      if (matchIndex >= 0) {
+        const matchOffset = completionLines[matchIndex].start;
+        cutOffset = cutOffset === undefined ? matchOffset : Math.min(cutOffset, matchOffset);
+        break;
+      }
+    }
+  }
+
+  return cutOffset === undefined ? text : text.slice(0, cutOffset).trimEnd();
+}
+
+function isExistingContextBlock(text, prefix, suffix) {
+  const completionLines = significantLineRecords(text);
+  if (!isUsefulContextBlock(completionLines)) {
+    return false;
+  }
+
+  return findLineWindow(significantLineRecords(tail(prefix, 8000)), completionLines) >= 0
+    || findLineWindow(significantLineRecords(head(suffix, 8000)), completionLines) >= 0;
+}
+
+function findLineWindow(lines, candidate) {
+  if (!candidate.length || lines.length < candidate.length) {
+    return -1;
+  }
+
+  for (let index = 0; index <= lines.length - candidate.length; index += 1) {
+    let matched = true;
+
+    for (let offset = 0; offset < candidate.length; offset += 1) {
+      if (lines[index + offset].normalized !== candidate[offset].normalized) {
+        matched = false;
+        break;
+      }
+    }
+
+    if (matched) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function isUsefulContextBlock(lines) {
+  if (!lines.length || !lines.some((line) => hasIdentifier(line.normalized))) {
+    return false;
+  }
+
+  const totalLength = lines.reduce((total, line) => total + line.normalized.length, 0);
+  return lines.length === 1
+    ? totalLength >= 60
+    : totalLength >= 40;
+}
+
+function significantLineRecords(text) {
+  const lines = String(text || "").split("\n");
+  const records = [];
+  let offset = 0;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const normalized = normalizeCodeLine(line);
+    const start = offset;
+    const end = start + line.length;
+    const nextStart = end + (index < lines.length - 1 ? 1 : 0);
+
+    if (normalized) {
+      records.push({
+        normalized,
+        start,
+        nextStart
+      });
+    }
+
+    offset = nextStart;
+  }
+
+  return records;
+}
+
+function normalizeCodeLine(line) {
+  return String(line || "").trim().replace(/\s+/g, " ");
+}
+
+function hasIdentifier(text) {
+  return /[A-Za-z_$][\w$]*/.test(text) && !/^[{}()[\],;.\s]+$/.test(text);
 }
 
 function trimToLineLimit(text, maxLines) {

@@ -59,6 +59,7 @@ class FimClient {
   }
 
   buildOpenAiRequest(runtimeConfig, context, config) {
+    const stopSequences = buildStopSequences(context);
     const body = {
       model: runtimeConfig.model || this.defaults.model,
       messages: [
@@ -76,6 +77,10 @@ class FimClient {
       stream: false
     };
 
+    if (stopSequences.length) {
+      body.stop = stopSequences;
+    }
+
     if (config.sendThinkingDisabled) {
       body.thinking = { type: "disabled" };
     }
@@ -91,6 +96,25 @@ class FimClient {
   }
 
   buildAnthropicRequest(runtimeConfig, context, config) {
+    const stopSequences = buildStopSequences(context);
+    const body = {
+      model: runtimeConfig.model || this.defaults.anthropicModel,
+      system: runtimeConfig.systemPrompt || this.defaults.systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: buildFimPrompt(context)
+        }
+      ],
+      temperature: config.temperature,
+      max_tokens: config.maxOutputTokens,
+      stream: false
+    };
+
+    if (stopSequences.length) {
+      body.stop_sequences = stopSequences;
+    }
+
     return {
       url: buildAnthropicUrl(runtimeConfig.baseUrl || this.defaults.anthropicBaseUrl),
       headers: {
@@ -98,19 +122,7 @@ class FimClient {
         "x-api-key": runtimeConfig.apiKey,
         "anthropic-version": "2023-06-01"
       },
-      body: {
-        model: runtimeConfig.model || this.defaults.anthropicModel,
-        system: runtimeConfig.systemPrompt || this.defaults.systemPrompt,
-        messages: [
-          {
-            role: "user",
-            content: buildFimPrompt(context)
-          }
-        ],
-        temperature: config.temperature,
-        max_tokens: config.maxOutputTokens,
-        stream: false
-      }
+      body
     };
   }
 
@@ -160,6 +172,42 @@ function buildFimPrompt(context) {
   ].join("\n");
 }
 
+function buildStopSequences(context) {
+  const metadata = context && context.metadata ? context.metadata : {};
+  const suffixText = [
+    metadata.lineSuffix || "",
+    context && context.suffix ? context.suffix : ""
+  ].filter(Boolean).join("\n");
+  const sequences = [];
+  const seen = new Set();
+
+  for (const line of normalizeNewlines(suffixText).split("\n")) {
+    const sequence = line.replace(/[ \t]+$/g, "");
+    const normalized = sequence.trim().replace(/\s+/g, " ");
+
+    if (!isUsefulStopSequence(sequence) || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    sequences.push(sequence.slice(0, 160));
+
+    if (sequences.length >= 3) {
+      break;
+    }
+  }
+
+  return sequences;
+}
+
+function isUsefulStopSequence(line) {
+  const text = String(line || "").trim();
+
+  return text.length >= 24
+    && !/^<\/?(fim_prefix|fim_suffix|extra_context|before_cursor|after_cursor|cursor)>$/i.test(text)
+    && !/^[{}()[\],;.\s]+$/.test(text);
+}
+
 function formatCachedContextSections(sections) {
   if (!sections.length) {
     return [];
@@ -196,6 +244,10 @@ function sanitizeProjectProfile(value) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 200);
+}
+
+function normalizeNewlines(text) {
+  return String(text || "").replace(/\r\n/g, "\n");
 }
 
 function normalizeProvider(value) {

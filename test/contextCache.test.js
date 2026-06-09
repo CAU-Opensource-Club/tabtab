@@ -1,7 +1,9 @@
 const assert = require("assert").strict;
+const { CompletionPostProcessor } = require("../src/completionPostProcessor");
 const { DiagnosticsCache } = require("../src/context/diagnosticsCache");
 const { FimContextBuilder } = require("../src/context/fimContextBuilder");
 const { IncludeAssist, collectExistingIncludes, isCursorInIncludeRegion } = require("../src/context/includeAssist");
+const { FimClient } = require("../src/fimClient");
 const { InlineCompletionProvider } = require("../src/inlineCompletionProvider");
 const { LocalHeaderIndex, extractHeaderSymbolsFromText } = require("../src/context/localHeaderIndex");
 const { ProjectProfileCache } = require("../src/context/projectProfileCache");
@@ -360,6 +362,105 @@ test("FimContextBuilder adds include-region instruction only inside include regi
 
   assert.match(includeSections.join("\n"), /prefer completing the missing #include lines/);
   assert.doesNotMatch(nonIncludeSections.join("\n"), /prefer completing the missing #include lines/);
+});
+
+test("FimClient sends long suffix lines as provider stop sequences", () => {
+  const client = new FimClient({
+    defaultBaseUrl: "https://openai.test",
+    defaultAnthropicBaseUrl: "https://anthropic.test"
+  });
+  const context = {
+    suffix: [
+      "  const auto serializedResponse = serializeResponse(response, options);",
+      "  writer.write(serializedResponse);",
+      "}"
+    ].join("\n"),
+    metadata: {
+      lineSuffix: ""
+    }
+  };
+  const config = {
+    temperature: 0.1,
+    maxOutputTokens: 64,
+    sendThinkingDisabled: false
+  };
+  const openAiRequest = client.buildOpenAiRequest(
+    { apiKey: "key", model: "model", baseUrl: "https://api.test/v1" },
+    context,
+    config
+  );
+  const anthropicRequest = client.buildAnthropicRequest(
+    { apiKey: "key", model: "model", baseUrl: "https://anthropic.test/v1" },
+    context,
+    config
+  );
+
+  assert.deepEqual(openAiRequest.body.stop, [
+    "  const auto serializedResponse = serializeResponse(response, options);",
+    "  writer.write(serializedResponse);"
+  ]);
+  assert.deepEqual(anthropicRequest.body.stop_sequences, openAiRequest.body.stop);
+});
+
+test("CompletionPostProcessor removes repeated prefix blocks", () => {
+  const processor = new CompletionPostProcessor();
+  const result = processor.process({
+    raw: [
+      "  const auto renderedValue = renderValue(input, options, diagnostics);",
+      "  sink(renderedValue);",
+      "  return renderedValue;"
+    ].join("\n"),
+    context: {
+      prefix: [
+        "void render() {",
+        "  const auto renderedValue = renderValue(input, options, diagnostics);",
+        "  sink(renderedValue);"
+      ].join("\n"),
+      suffix: "",
+      metadata: {
+        linePrefix: "",
+        lineSuffix: "",
+        indentation: ""
+      }
+    },
+    config: {
+      maxCompletionLines: 8,
+      maxOutputTokens: 128
+    }
+  });
+
+  assert.equal(result, "  return renderedValue;");
+});
+
+test("CompletionPostProcessor truncates repeated suffix blocks", () => {
+  const processor = new CompletionPostProcessor();
+  const result = processor.process({
+    raw: [
+      "auto response = buildResponse(request);",
+      "  const auto serializedResponse = serializeResponse(response, options);",
+      "  writer.write(serializedResponse);",
+      "}"
+    ].join("\n"),
+    context: {
+      prefix: "",
+      suffix: [
+        "  const auto serializedResponse = serializeResponse(response, options);",
+        "  writer.write(serializedResponse);",
+        "}"
+      ].join("\n"),
+      metadata: {
+        linePrefix: "",
+        lineSuffix: "",
+        indentation: ""
+      }
+    },
+    config: {
+      maxCompletionLines: 8,
+      maxOutputTokens: 128
+    }
+  });
+
+  assert.equal(result, "auto response = buildResponse(request);");
 });
 
 test("isCursorInIncludeRegion handles include preamble conservatively", () => {
