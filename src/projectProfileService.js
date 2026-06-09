@@ -10,6 +10,13 @@ const PROFILE_MAX_CHARS = 200;
 const STATUS_PROFILE_MAX_CHARS = 60;
 const DEFAULT_MAX_FILES = 2000;
 const DEFAULT_MAX_CHARS = 12000;
+const DEFAULT_PROJECT_PROFILE_CONFIG = {
+  enabled: false,
+  manualProfile: "",
+  showInStatusBar: true,
+  maxFiles: DEFAULT_MAX_FILES,
+  maxChars: DEFAULT_MAX_CHARS
+};
 
 const EXCLUDED_DIRECTORIES = new Set([
   ".cache",
@@ -58,10 +65,12 @@ const EXACT_MANIFEST_PATHS = [
 ];
 
 class ProjectProfileService {
-  constructor({ vscode, context, output }) {
+  constructor({ vscode, context, output, projectProfileConfig, writeProjectProfileConfig }) {
     this.vscode = vscode;
     this.context = context;
     this.output = output;
+    this.projectProfileConfig = normalizeProjectProfileConfig(projectProfileConfig);
+    this.writeProjectProfileConfig = writeProjectProfileConfig;
     this.memoryCache = new Map();
     this.pendingDetections = new Map();
     this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
@@ -82,6 +91,31 @@ class ProjectProfileService {
   start() {
     this.refreshStatusBar();
     this.detectActiveWorkspaceSoon();
+  }
+
+  getProjectProfileConfig() {
+    return { ...this.projectProfileConfig };
+  }
+
+  async updateProjectProfileConfig(nextConfig, { detect = false, force = false } = {}) {
+    const config = normalizeProjectProfileConfig({
+      ...this.projectProfileConfig,
+      ...nextConfig
+    });
+
+    this.projectProfileConfig = config;
+
+    if (typeof this.writeProjectProfileConfig === "function") {
+      const writtenConfig = await this.writeProjectProfileConfig(config);
+      this.projectProfileConfig = normalizeProjectProfileConfig(writtenConfig || config);
+    }
+
+    this.refreshStatusBar();
+    if (detect && this.isEnabled() && !this.getManualProfile()) {
+      await this.detectActiveWorkspace({ force, showSuccess: false });
+    }
+
+    return this.getProjectProfileConfig();
   }
 
   getPromptProfile(document) {
@@ -148,14 +182,9 @@ class ProjectProfileService {
     }
 
     const manualProfile = sanitizeProfile(value);
-    await this.vscode.workspace
-      .getConfiguration("tabtab")
-      .update("projectProfile.manualProfile", manualProfile, this.getConfigurationTarget());
+    await this.updateProjectProfileConfig({ manualProfile }, { detect: !manualProfile });
 
     this.refreshStatusBar();
-    if (!manualProfile) {
-      this.detectForDocumentSoon(this.getActiveDocument());
-    }
   }
 
   async clearActiveWorkspaceCache() {
@@ -435,16 +464,36 @@ class ProjectProfileService {
   }
 
   getBooleanConfig(key, fallback) {
+    if (key === "projectProfile.enabled") {
+      return this.projectProfileConfig.enabled;
+    }
+
+    if (key === "projectProfile.showInStatusBar") {
+      return this.projectProfileConfig.showInStatusBar;
+    }
+
     const value = this.vscode.workspace.getConfiguration("tabtab").get(key);
     return typeof value === "boolean" ? value : fallback;
   }
 
   getNumberConfig(key, fallback) {
+    if (key === "projectProfile.maxFiles") {
+      return this.projectProfileConfig.maxFiles;
+    }
+
+    if (key === "projectProfile.maxChars") {
+      return this.projectProfileConfig.maxChars;
+    }
+
     const value = this.vscode.workspace.getConfiguration("tabtab").get(key);
     return Number.isFinite(value) ? value : fallback;
   }
 
   getStringConfig(key, fallback) {
+    if (key === "projectProfile.manualProfile") {
+      return this.projectProfileConfig.manualProfile;
+    }
+
     const value = this.vscode.workspace.getConfiguration("tabtab").get(key);
     return typeof value === "string" ? value : fallback;
   }
@@ -835,6 +884,28 @@ function sanitizeProfile(value) {
     .slice(0, PROFILE_MAX_CHARS);
 }
 
+function normalizeProjectProfileConfig(config) {
+  const source = config && typeof config === "object" && !Array.isArray(config)
+    ? config
+    : {};
+  const maxFiles = Number.isFinite(source.maxFiles)
+    ? source.maxFiles
+    : DEFAULT_PROJECT_PROFILE_CONFIG.maxFiles;
+  const maxChars = Number.isFinite(source.maxChars)
+    ? source.maxChars
+    : DEFAULT_PROJECT_PROFILE_CONFIG.maxChars;
+
+  return {
+    enabled: typeof source.enabled === "boolean" ? source.enabled : DEFAULT_PROJECT_PROFILE_CONFIG.enabled,
+    manualProfile: sanitizeProfile(source.manualProfile),
+    showInStatusBar: typeof source.showInStatusBar === "boolean"
+      ? source.showInStatusBar
+      : DEFAULT_PROJECT_PROFILE_CONFIG.showInStatusBar,
+    maxFiles: Math.max(1, Math.floor(maxFiles)),
+    maxChars: Math.max(1, Math.floor(maxChars))
+  };
+}
+
 function sanitizeControlText(value) {
   return String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ");
 }
@@ -871,5 +942,6 @@ function comparePaths(left, right) {
 }
 
 module.exports = {
-  ProjectProfileService
+  ProjectProfileService,
+  normalizeProjectProfileConfig
 };

@@ -2,7 +2,7 @@ const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
 const { InlineCompletionProvider } = require("./src/inlineCompletionProvider");
-const { ProjectProfileService } = require("./src/projectProfileService");
+const { ProjectProfileService, normalizeProjectProfileConfig } = require("./src/projectProfileService");
 
 const SECRET_KEY = "tabtab.deepseekApiKey";
 const CONFIG_FILE_NAME = "tabtab.config.json";
@@ -40,7 +40,14 @@ async function activate(context) {
   const projectProfileService = new ProjectProfileService({
     vscode,
     context,
-    output
+    output,
+    projectProfileConfig: initialConfig.projectProfile,
+    writeProjectProfileConfig: async (projectProfileConfig) => {
+      const config = await writeTabTabConfig(context, {
+        projectProfile: projectProfileConfig
+      });
+      return config.projectProfile;
+    }
   });
 
   const provider = new InlineCompletionProvider({
@@ -140,6 +147,15 @@ class TabTabSettingsViewProvider {
         return;
       }
 
+      if (message.type === "projectProfileChanged") {
+        await this.updateProjectProfileSettings(message.values || {}, {
+          detect: message.detect === true,
+          force: message.force === true
+        });
+        await this.refreshProjectProfile(message.notice || "Project profile settings updated.");
+        return;
+      }
+
       if (message.type === "clearApiKey") {
         await clearApiKey(this.context);
         await this.refresh("API key cleared.");
@@ -159,7 +175,9 @@ class TabTabSettingsViewProvider {
     }
 
     const config = await readTabTabConfig(this.context);
-    const projectProfileConfig = vscode.workspace.getConfiguration("tabtab");
+    const projectProfileConfig = this.projectProfileService
+      ? this.projectProfileService.getProjectProfileConfig()
+      : config.projectProfile;
     const detectedProjectProfile = this.projectProfileService
       ? this.projectProfileService.getDisplayProfile(this.projectProfileService.getActiveDocument())
       : "";
@@ -175,8 +193,8 @@ class TabTabSettingsViewProvider {
         systemPrompt: config.systemPrompt
       },
       projectProfile: {
-        enabled: projectProfileConfig.get("projectProfile.enabled", false) === true,
-        manualProfile: normalizeProjectProfileValue(projectProfileConfig.get("projectProfile.manualProfile", "")),
+        enabled: projectProfileConfig.enabled === true,
+        manualProfile: normalizeProjectProfileValue(projectProfileConfig.manualProfile),
         detectedProfile: detectedProjectProfile
       },
       apiKey: {
@@ -218,13 +236,15 @@ class TabTabSettingsViewProvider {
       apiKey,
       systemPrompt
     });
-    await this.updateProjectProfileSettings(values);
+    await this.updateProjectProfileSettings(values, {
+      detect: values.projectProfileEnabled === true && !normalizeProjectProfileValue(values.projectProfileManualProfile)
+    });
 
     vscode.window.showInformationMessage(`TabTab settings saved to ${CONFIG_FILE_NAME} and ${SYSTEM_PROMPT_FILE_NAME}.`);
     await this.refresh(`Saved to ${CONFIG_FILE_NAME} and ${SYSTEM_PROMPT_FILE_NAME}.`);
   }
 
-  async updateProjectProfileSettings(values) {
+  async updateProjectProfileSettings(values, { detect = false, force = false } = {}) {
     if (
       !Object.prototype.hasOwnProperty.call(values, "projectProfileEnabled")
       && !Object.prototype.hasOwnProperty.call(values, "projectProfileManualProfile")
@@ -232,17 +252,52 @@ class TabTabSettingsViewProvider {
       return;
     }
 
-    const target = getWorkspaceConfigurationTarget();
-    const workspaceConfig = vscode.workspace.getConfiguration("tabtab");
     const enabled = values.projectProfileEnabled === true;
     const manualProfile = normalizeProjectProfileValue(values.projectProfileManualProfile);
+    const currentConfig = this.projectProfileService
+      ? this.projectProfileService.getProjectProfileConfig()
+      : (await readTabTabConfig(this.context)).projectProfile;
+    const nextConfig = normalizeProjectProfileConfig({
+      ...currentConfig,
+      enabled,
+      manualProfile
+    });
 
-    await workspaceConfig.update("projectProfile.enabled", enabled, target);
-    await workspaceConfig.update("projectProfile.manualProfile", manualProfile, target);
-
-    if (enabled && !manualProfile && this.projectProfileService) {
-      this.projectProfileService.detectActiveWorkspace({ force: false, showSuccess: false });
+    if (this.projectProfileService) {
+      await this.projectProfileService.updateProjectProfileConfig(nextConfig, {
+        detect,
+        force
+      });
+      return;
     }
+
+    await writeTabTabConfig(this.context, {
+      projectProfile: nextConfig
+    });
+  }
+
+  async refreshProjectProfile(notice = "") {
+    if (!this.view) {
+      return;
+    }
+
+    const config = await readTabTabConfig(this.context);
+    const projectProfileConfig = this.projectProfileService
+      ? this.projectProfileService.getProjectProfileConfig()
+      : config.projectProfile;
+    const detectedProjectProfile = this.projectProfileService
+      ? this.projectProfileService.getDisplayProfile(this.projectProfileService.getActiveDocument())
+      : "";
+
+    await this.view.webview.postMessage({
+      type: "projectProfile",
+      notice,
+      projectProfile: {
+        enabled: projectProfileConfig.enabled === true,
+        manualProfile: normalizeProjectProfileValue(projectProfileConfig.manualProfile),
+        detectedProfile: detectedProjectProfile
+      }
+    });
   }
 
   getHtml(webview) {
@@ -440,7 +495,15 @@ class TabTabSettingsViewProvider {
 
     window.addEventListener("message", (event) => {
       const message = event.data;
-      if (!message || message.type !== "state") {
+      if (!message || (message.type !== "state" && message.type !== "projectProfile")) {
+        return;
+      }
+
+      if (message.type === "projectProfile") {
+        applyProjectProfileState(message.projectProfile || {});
+        if (message.notice) {
+          status.textContent = message.notice;
+        }
         return;
       }
 
@@ -449,13 +512,7 @@ class TabTabSettingsViewProvider {
       model.value = message.settings.model || "";
       apiKey.value = message.settings.apiKey || "";
       systemPrompt.value = message.settings.systemPrompt || "";
-      const projectProfile = message.projectProfile || {};
-      projectProfileEnabled.checked = Boolean(projectProfile.enabled);
-      projectProfileManualProfile.value = projectProfile.manualProfile || "";
-      projectProfileManualProfile.placeholder = projectProfile.detectedProfile || "";
-      detectedProjectProfile.textContent = projectProfile.detectedProfile
-        ? "Detected: " + projectProfile.detectedProfile
-        : "Detected: empty";
+      applyProjectProfileState(message.projectProfile || {});
       defaultBaseUrl = message.defaults.baseUrl || "";
       defaultAnthropicBaseUrl = message.defaults.anthropicBaseUrl || "";
       defaultModel = message.defaults.model || "";
@@ -470,6 +527,22 @@ class TabTabSettingsViewProvider {
       status.textContent = message.notice || "Config: ${CONFIG_FILE_NAME}; prompt: ${SYSTEM_PROMPT_FILE_NAME}; API key " + (hasApiKey ? "set" : "empty");
       save.disabled = false;
     });
+
+    function applyProjectProfileState(projectProfile) {
+      projectProfileEnabled.checked = Boolean(projectProfile.enabled);
+      projectProfileManualProfile.value = projectProfile.manualProfile || "";
+      projectProfileManualProfile.placeholder = projectProfile.detectedProfile || "";
+      detectedProjectProfile.textContent = projectProfile.detectedProfile
+        ? "Detected: " + projectProfile.detectedProfile
+        : "Detected: empty";
+    }
+
+    function getProjectProfileValues() {
+      return {
+        projectProfileEnabled: projectProfileEnabled.checked,
+        projectProfileManualProfile: projectProfileManualProfile.value
+      };
+    }
 
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -493,6 +566,21 @@ class TabTabSettingsViewProvider {
     resetPrompt.addEventListener("click", () => {
       systemPrompt.value = defaultSystemPrompt;
       status.textContent = "Default prompt restored.";
+    });
+
+    projectProfileEnabled.addEventListener("change", () => {
+      status.textContent = projectProfileEnabled.checked
+        ? "Generating project profile..."
+        : "Project profile disabled.";
+      vscode.postMessage({
+        type: "projectProfileChanged",
+        values: getProjectProfileValues(),
+        detect: projectProfileEnabled.checked,
+        force: projectProfileEnabled.checked,
+        notice: projectProfileEnabled.checked
+          ? "Project profile generated."
+          : "Project profile disabled."
+      });
     });
 
     clearApiKey.addEventListener("click", () => {
@@ -671,7 +759,8 @@ async function normalizeTabTabConfig(context, config, systemPrompt) {
     baseUrl: getConfigString(config.baseUrl) || workspaceConfig.get("baseUrl", getDefaultBaseUrl(provider)),
     model: getConfigString(config.model) || workspaceConfig.get("model", getDefaultModel(provider)),
     apiKey,
-    systemPrompt: getPromptString(systemPrompt) || workspaceConfig.get("systemPrompt", DEFAULT_SYSTEM_PROMPT)
+    systemPrompt: getPromptString(systemPrompt) || workspaceConfig.get("systemPrompt", DEFAULT_SYSTEM_PROMPT),
+    projectProfile: getProjectProfileConfig(config, workspaceConfig)
   };
 }
 
@@ -680,6 +769,7 @@ function shouldNormalizeConfig(config) {
     || typeof config.baseUrl !== "string"
     || typeof config.model !== "string"
     || typeof config.apiKey !== "string"
+    || !isProjectProfileConfig(config.projectProfile)
     || Object.prototype.hasOwnProperty.call(config, "systemPrompt")
     || Object.prototype.hasOwnProperty.call(config, "deepseekApiKey");
 }
@@ -724,16 +814,45 @@ function getConfigString(value) {
   return typeof value === "string" ? stripBom(value).trim() : "";
 }
 
+function getProjectProfileConfig(config, workspaceConfig) {
+  const source = config && config.projectProfile && typeof config.projectProfile === "object" && !Array.isArray(config.projectProfile)
+    ? config.projectProfile
+    : {};
+
+  return normalizeProjectProfileConfig({
+    enabled: typeof source.enabled === "boolean"
+      ? source.enabled
+      : workspaceConfig.get("projectProfile.enabled", false),
+    manualProfile: typeof source.manualProfile === "string"
+      ? source.manualProfile
+      : workspaceConfig.get("projectProfile.manualProfile", ""),
+    showInStatusBar: typeof source.showInStatusBar === "boolean"
+      ? source.showInStatusBar
+      : workspaceConfig.get("projectProfile.showInStatusBar", true),
+    maxFiles: Number.isFinite(source.maxFiles)
+      ? source.maxFiles
+      : workspaceConfig.get("projectProfile.maxFiles", 2000),
+    maxChars: Number.isFinite(source.maxChars)
+      ? source.maxChars
+      : workspaceConfig.get("projectProfile.maxChars", 12000)
+  });
+}
+
+function isProjectProfileConfig(value) {
+  return value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && typeof value.enabled === "boolean"
+    && typeof value.manualProfile === "string"
+    && typeof value.showInStatusBar === "boolean"
+    && Number.isFinite(value.maxFiles)
+    && Number.isFinite(value.maxChars);
+}
+
 function normalizeProjectProfileValue(value) {
   return typeof value === "string"
     ? stripBom(value).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 200)
     : "";
-}
-
-function getWorkspaceConfigurationTarget() {
-  return vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length
-    ? vscode.ConfigurationTarget.Workspace
-    : vscode.ConfigurationTarget.Global;
 }
 
 function getPromptString(value) {
