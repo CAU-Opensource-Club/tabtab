@@ -1,0 +1,8 @@
+.git/**
+.vscode/**
+.vscode-test/**
+test/**
+node_modules/**
+*.vsix
+*.log
+tabtab.config.json
