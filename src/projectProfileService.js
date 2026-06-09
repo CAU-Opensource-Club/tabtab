@@ -10,6 +10,7 @@ const PROFILE_MAX_CHARS = 200;
 const STATUS_PROFILE_MAX_CHARS = 60;
 const DEFAULT_MAX_FILES = 2000;
 const DEFAULT_MAX_CHARS = 12000;
+const PROJECT_PROFILE_DETECTOR_VERSION = 2;
 const DEFAULT_PROJECT_PROFILE_CONFIG = {
   enabled: false,
   manualProfile: "",
@@ -54,6 +55,7 @@ const EXACT_MANIFEST_PATHS = [
   "go.mod",
   "CMakeLists.txt",
   "Makefile",
+  "makefile",
   "pom.xml",
   "build.gradle",
   "composer.json",
@@ -326,6 +328,7 @@ class ProjectProfileService {
     const packageJson = await readPackageJson(root);
     const gitHead = await getGitHead(root);
     const fingerprint = hashJson({
+      detectorVersion: PROJECT_PROFILE_DETECTOR_VERSION,
       gitHead,
       maxChars: limits.maxChars,
       maxFiles: limits.maxFiles,
@@ -729,6 +732,10 @@ function detectProjectProfileFromRules({ files, packageJson }) {
     return "C/C++ CMake project; prefer existing targets and modern C++ patterns.";
   }
 
+  if (hasMakefile(fileSet)) {
+    return "C/C++ Makefile project; prefer existing make targets and modern C++ patterns.";
+  }
+
   if (fileSet.has("pom.xml")) {
     return "Maven Java project; prefer existing Maven module and JVM patterns.";
   }
@@ -789,6 +796,10 @@ function hasFimSignal(fileSet) {
   }
 
   return false;
+}
+
+function hasMakefile(fileSet) {
+  return fileSet.has("Makefile") || fileSet.has("makefile") || fileSet.has("GNUmakefile");
 }
 
 function hasExtension(fileSet, extension) {
