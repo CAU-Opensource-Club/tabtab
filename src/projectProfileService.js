@@ -6,11 +6,12 @@ const path = require("path");
 const CACHE_KEY_PREFIX = "tabtab.projectProfile.cache:";
 const COMMAND_EDIT = "tabtab.projectProfile.edit";
 const GIT_TIMEOUT_MS = 1500;
+const STRUCTURE_COMMAND_TIMEOUT_MS = 1500;
 const PROFILE_MAX_CHARS = 200;
 const STATUS_PROFILE_MAX_CHARS = 60;
 const DEFAULT_MAX_FILES = 2000;
 const DEFAULT_MAX_CHARS = 12000;
-const PROJECT_PROFILE_DETECTOR_VERSION = 2;
+const PROJECT_PROFILE_DETECTOR_VERSION = 4;
 const DEFAULT_PROJECT_PROFILE_CONFIG = {
   enabled: false,
   manualProfile: "",
@@ -55,6 +56,7 @@ const EXACT_MANIFEST_PATHS = [
   "go.mod",
   "CMakeLists.txt",
   "Makefile",
+  "GNUmakefile",
   "makefile",
   "pom.xml",
   "build.gradle",
@@ -366,7 +368,15 @@ class ProjectProfileService {
     try {
       files = await listGitFiles(root, limits);
     } catch (error) {
-      files = await this.findWorkspaceFiles(workspaceFolder, limits);
+      try {
+        files = await listFindFiles(root, limits);
+      } catch (findError) {
+        try {
+          files = await listTreeFiles(root, limits);
+        } catch (treeError) {
+          files = await this.findWorkspaceFiles(workspaceFolder, limits);
+        }
+      }
     }
 
     return {
@@ -603,6 +613,150 @@ async function listGitFiles(root, limits) {
   });
 }
 
+async function listFindFiles(root, limits) {
+  const pruneArgs = [];
+  for (const directory of EXCLUDED_DIRECTORIES) {
+    if (pruneArgs.length) {
+      pruneArgs.push("-o");
+    }
+    pruneArgs.push("-name", directory);
+  }
+
+  const args = [
+    ".",
+    "(",
+    ...pruneArgs,
+    ")",
+    "-prune",
+    "-o",
+    "-type",
+    "f",
+    "-print"
+  ];
+
+  return listLineSeparatedCommandFiles({
+    root,
+    command: "find",
+    args,
+    limits,
+    timeoutMs: STRUCTURE_COMMAND_TIMEOUT_MS,
+    normalizePath: normalizeRelativePath
+  });
+}
+
+async function listTreeFiles(root, limits) {
+  const ignorePattern = [
+    ...EXCLUDED_DIRECTORIES,
+    "*.lock",
+    "*.min.js",
+    "*.map"
+  ].join("|");
+
+  return listLineSeparatedCommandFiles({
+    root,
+    command: "tree",
+    args: ["-a", "-f", "-i", "-F", "--noreport", "-I", ignorePattern, "."],
+    limits,
+    timeoutMs: STRUCTURE_COMMAND_TIMEOUT_MS,
+    normalizePath: normalizeTreePath
+  });
+}
+
+async function listLineSeparatedCommandFiles({ root, command, args, limits, timeoutMs, normalizePath }) {
+  return new Promise((resolve, reject) => {
+    const files = [];
+    let chars = 0;
+    let pending = "";
+    let finished = false;
+    let stderr = "";
+    const child = childProcess.spawn(command, args, {
+      cwd: root,
+      shell: false
+    });
+    const timer = setTimeout(() => {
+      finish(reject, new Error(`${command} timed out`));
+      child.kill();
+    }, timeoutMs);
+
+    const finish = (callback, value) => {
+      if (finished) {
+        return;
+      }
+
+      finished = true;
+      clearTimeout(timer);
+      callback(value);
+    };
+
+    const consume = (includeTail) => {
+      while (pending && !finished) {
+        const index = pending.indexOf("\n");
+        if (index < 0) {
+          if (includeTail) {
+            addPath(pending);
+            pending = "";
+          }
+          break;
+        }
+
+        addPath(pending.slice(0, index));
+        pending = pending.slice(index + 1);
+      }
+    };
+
+    const addPath = (rawPath) => {
+      if (finished) {
+        return;
+      }
+
+      const file = normalizePath(rawPath.replace(/\r$/, ""));
+      if (!file || isExcludedPath(file) || files.length >= limits.maxFiles) {
+        return;
+      }
+
+      const nextChars = chars + file.length + 1;
+      if (nextChars > limits.maxChars) {
+        finish(resolve, files);
+        child.kill();
+        return;
+      }
+
+      files.push(file);
+      chars = nextChars;
+    };
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      pending += chunk;
+      consume(false);
+
+      if (!finished && files.length >= limits.maxFiles) {
+        finish(resolve, files);
+        child.kill();
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      finish(reject, error);
+    });
+    child.on("close", (code) => {
+      if (finished) {
+        return;
+      }
+
+      consume(true);
+      if (code === 0) {
+        finish(resolve, files.sort(comparePaths));
+      } else {
+        finish(reject, new Error(stderr.trim() || `${command} exited with ${code}`));
+      }
+    });
+  });
+}
+
 async function getGitHead(root) {
   try {
     return sanitizeControlText(await runGitText(root, ["rev-parse", "HEAD"], GIT_TIMEOUT_MS)).trim();
@@ -728,6 +882,11 @@ function detectProjectProfileFromRules({ files, packageJson }) {
     return "Go project; prefer module-local packages and idiomatic Go patterns.";
   }
 
+  const domainProfile = inferDomainProfile(fileSet);
+  if (domainProfile) {
+    return domainProfile;
+  }
+
   if (fileSet.has("CMakeLists.txt")) {
     return "C/C++ CMake project; prefer existing targets and modern C++ patterns.";
   }
@@ -746,6 +905,37 @@ function detectProjectProfileFromRules({ files, packageJson }) {
 
   if (hasPackageJson) {
     return sanitizeProfile(`${language} project; prefer project-local module and tooling patterns.`);
+  }
+
+  return "";
+}
+
+function inferDomainProfile(fileSet) {
+  const hasDataPlane = hasPathPrefix(fileSet, "src/data_plane/")
+    || hasPathPrefix(fileSet, "src/dataplane/");
+  const hasControlPlane = hasPathPrefix(fileSet, "src/control_plane/")
+    || hasPathPrefix(fileSet, "src/controlplane/");
+  const hasNetProtocol = hasPathPrefix(fileSet, "src/net/protocol/");
+  const hasRouterTables = hasPathPrefix(fileSet, "src/net/service/fib/")
+    || hasPathPrefix(fileSet, "src/net/service/fdb/")
+    || hasPathPrefix(fileSet, "src/net/service/nat/");
+  const hasEbpfXdp = hasPathPrefix(fileSet, "ebpf/")
+    || hasPathSubstring(fileSet, "xdp");
+
+  if (
+    (hasDataPlane && hasControlPlane && hasNetProtocol)
+    || (hasDataPlane && hasRouterTables)
+    || (hasEbpfXdp && hasNetProtocol)
+  ) {
+    return "High-performance C++ router/data-plane project with eBPF/XDP networking; prefer low-latency packet-processing patterns.";
+  }
+
+  if (hasNetProtocol && hasRouterTables) {
+    return "C++ router/networking project; prefer packet-processing, protocol parsing, and table-management patterns.";
+  }
+
+  if (hasEbpfXdp) {
+    return "C/C++ eBPF/XDP networking project; prefer low-level packet-processing and kernel/userspace boundary patterns.";
   }
 
   return "";
@@ -822,6 +1012,26 @@ function hasRootPrefix(fileSet, prefix) {
   return false;
 }
 
+function hasPathPrefix(fileSet, prefix) {
+  for (const file of fileSet) {
+    if (file.startsWith(prefix)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasPathSubstring(fileSet, value) {
+  for (const file of fileSet) {
+    if (file.includes(value)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function isRootConfigMatch(file, prefix) {
   return !file.includes("/") && file.startsWith(prefix);
 }
@@ -873,6 +1083,7 @@ function isExcludedPath(relativePath) {
 function normalizeRelativePath(value) {
   const cleaned = sanitizeControlText(value)
     .replace(/\\/g, "/")
+    .replace(/^(\.\/)+/, "")
     .replace(/^\/+/, "")
     .trim();
 
@@ -886,6 +1097,15 @@ function normalizeRelativePath(value) {
   }
 
   return parts.join("/");
+}
+
+function normalizeTreePath(value) {
+  const text = sanitizeControlText(value).trim();
+  if (!text || text.endsWith("/")) {
+    return "";
+  }
+
+  return normalizeRelativePath(text.replace(/[*=@|]$/, ""));
 }
 
 function sanitizeProfile(value) {
