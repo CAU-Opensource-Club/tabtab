@@ -57,7 +57,7 @@ async function activate(context) {
       defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT
     }
   });
-  const settingsProvider = new TabTabSettingsViewProvider(context);
+  const settingsProvider = new TabTabSettingsViewProvider(context, projectProfileService);
   const documentSelector = [
     { scheme: "file" },
     { scheme: "untitled" }
@@ -98,8 +98,9 @@ function deactivate() {}
 class TabTabSettingsViewProvider {
   static viewType = "tabtab.settingsView";
 
-  constructor(context) {
+  constructor(context, projectProfileService) {
     this.context = context;
+    this.projectProfileService = projectProfileService;
     this.view = undefined;
 
     context.subscriptions.push(
@@ -158,6 +159,10 @@ class TabTabSettingsViewProvider {
     }
 
     const config = await readTabTabConfig(this.context);
+    const projectProfileConfig = vscode.workspace.getConfiguration("tabtab");
+    const detectedProjectProfile = this.projectProfileService
+      ? this.projectProfileService.getDisplayProfile(this.projectProfileService.getActiveDocument())
+      : "";
 
     await this.view.webview.postMessage({
       type: "state",
@@ -168,6 +173,11 @@ class TabTabSettingsViewProvider {
         model: config.model,
         apiKey: config.apiKey,
         systemPrompt: config.systemPrompt
+      },
+      projectProfile: {
+        enabled: projectProfileConfig.get("projectProfile.enabled", false) === true,
+        manualProfile: normalizeProjectProfileValue(projectProfileConfig.get("projectProfile.manualProfile", "")),
+        detectedProfile: detectedProjectProfile
       },
       apiKey: {
         isSet: Boolean(config.apiKey)
@@ -208,9 +218,31 @@ class TabTabSettingsViewProvider {
       apiKey,
       systemPrompt
     });
+    await this.updateProjectProfileSettings(values);
 
     vscode.window.showInformationMessage(`TabTab settings saved to ${CONFIG_FILE_NAME} and ${SYSTEM_PROMPT_FILE_NAME}.`);
     await this.refresh(`Saved to ${CONFIG_FILE_NAME} and ${SYSTEM_PROMPT_FILE_NAME}.`);
+  }
+
+  async updateProjectProfileSettings(values) {
+    if (
+      !Object.prototype.hasOwnProperty.call(values, "projectProfileEnabled")
+      && !Object.prototype.hasOwnProperty.call(values, "projectProfileManualProfile")
+    ) {
+      return;
+    }
+
+    const target = getWorkspaceConfigurationTarget();
+    const workspaceConfig = vscode.workspace.getConfiguration("tabtab");
+    const enabled = values.projectProfileEnabled === true;
+    const manualProfile = normalizeProjectProfileValue(values.projectProfileManualProfile);
+
+    await workspaceConfig.update("projectProfile.enabled", enabled, target);
+    await workspaceConfig.update("projectProfile.manualProfile", manualProfile, target);
+
+    if (enabled && !manualProfile && this.projectProfileService) {
+      this.projectProfileService.detectActiveWorkspace({ force: false, showSuccess: false });
+    }
   }
 
   getHtml(webview) {
@@ -268,6 +300,21 @@ class TabTabSettingsViewProvider {
       line-height: 1.45;
     }
 
+    textarea.compact {
+      min-height: 86px;
+    }
+
+    .checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .checkbox-label input {
+      width: auto;
+      margin: 0;
+    }
+
     input:focus,
     select:focus,
     textarea:focus,
@@ -310,6 +357,10 @@ class TabTabSettingsViewProvider {
       color: var(--vscode-descriptionForeground);
       overflow-wrap: anywhere;
     }
+
+    .detected-profile {
+      margin-top: -8px;
+    }
   </style>
 </head>
 <body>
@@ -342,6 +393,18 @@ class TabTabSettingsViewProvider {
       <textarea id="systemPrompt" spellcheck="false" required></textarea>
     </label>
 
+    <label class="checkbox-label">
+      <input id="projectProfileEnabled" type="checkbox">
+      <span>Generate Project Profile</span>
+    </label>
+
+    <label>
+      Project Profile
+      <textarea id="projectProfileManualProfile" class="compact" spellcheck="false" maxlength="200"></textarea>
+    </label>
+
+    <div id="detectedProjectProfile" class="status detected-profile"></div>
+
     <div class="actions">
       <button id="save" type="submit">Save</button>
       <button id="testApi" class="secondary" type="button">Test API</button>
@@ -360,6 +423,9 @@ class TabTabSettingsViewProvider {
     const model = document.getElementById("model");
     const apiKey = document.getElementById("apiKey");
     const systemPrompt = document.getElementById("systemPrompt");
+    const projectProfileEnabled = document.getElementById("projectProfileEnabled");
+    const projectProfileManualProfile = document.getElementById("projectProfileManualProfile");
+    const detectedProjectProfile = document.getElementById("detectedProjectProfile");
     const status = document.getElementById("status");
     const save = document.getElementById("save");
     const testApi = document.getElementById("testApi");
@@ -383,6 +449,13 @@ class TabTabSettingsViewProvider {
       model.value = message.settings.model || "";
       apiKey.value = message.settings.apiKey || "";
       systemPrompt.value = message.settings.systemPrompt || "";
+      const projectProfile = message.projectProfile || {};
+      projectProfileEnabled.checked = Boolean(projectProfile.enabled);
+      projectProfileManualProfile.value = projectProfile.manualProfile || "";
+      projectProfileManualProfile.placeholder = projectProfile.detectedProfile || "";
+      detectedProjectProfile.textContent = projectProfile.detectedProfile
+        ? "Detected: " + projectProfile.detectedProfile
+        : "Detected: empty";
       defaultBaseUrl = message.defaults.baseUrl || "";
       defaultAnthropicBaseUrl = message.defaults.anthropicBaseUrl || "";
       defaultModel = message.defaults.model || "";
@@ -410,7 +483,9 @@ class TabTabSettingsViewProvider {
           baseUrl: baseUrl.value,
           model: model.value,
           apiKey: apiKey.value,
-          systemPrompt: systemPrompt.value
+          systemPrompt: systemPrompt.value,
+          projectProfileEnabled: projectProfileEnabled.checked,
+          projectProfileManualProfile: projectProfileManualProfile.value
         }
       });
     });
@@ -647,6 +722,18 @@ function getExtensionRoot(context) {
 
 function getConfigString(value) {
   return typeof value === "string" ? stripBom(value).trim() : "";
+}
+
+function normalizeProjectProfileValue(value) {
+  return typeof value === "string"
+    ? stripBom(value).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 200)
+    : "";
+}
+
+function getWorkspaceConfigurationTarget() {
+  return vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length
+    ? vscode.ConfigurationTarget.Workspace
+    : vscode.ConfigurationTarget.Global;
 }
 
 function getPromptString(value) {
