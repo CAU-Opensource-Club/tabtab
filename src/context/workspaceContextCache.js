@@ -106,6 +106,31 @@ class WorkspaceContextCache {
           localHeaderIndex: this.localHeaderIndex
         }).slice(0, 3)
         : [];
+      const includeCompletionMode = includeAssistEnabled
+        ? this.includeAssist.getIncludeCompletionMode({
+          document,
+          position,
+          missingStandardIncludes,
+          missingProjectIncludes
+        })
+        : makeEmptyIncludeCompletionMode();
+      const standardHeaderCandidates = includeAssistEnabled
+        ? this.getStandardHeaderCandidates(includeCompletionMode)
+        : [];
+      const localHeaderCandidates = includeAssistEnabled && this.isProjectHeaderAssistEnabled()
+        ? this.getLocalHeaderCandidates(includeCompletionMode)
+        : [];
+      const includeCompletion = includeAssistEnabled
+        ? this.includeAssist.buildPreferredIncludeCompletion({
+          document,
+          position,
+          mode: includeCompletionMode,
+          missingStandardIncludes,
+          missingProjectIncludes,
+          standardHeaderCandidates,
+          localHeaderCandidates
+        })
+        : undefined;
 
       if (isCancellationRequested(token)) {
         return empty;
@@ -117,6 +142,10 @@ class WorkspaceContextCache {
         missingStandardIncludes,
         missingProjectIncludes,
         includeRegion,
+        includeCompletionMode,
+        standardHeaderCandidates,
+        localHeaderCandidates,
+        includeCompletion,
         promptSections: []
       };
       snapshot.promptSections = this.fimContextBuilder.buildPromptSections(snapshot, {
@@ -151,6 +180,35 @@ class WorkspaceContextCache {
 
   isLocalHeaderIndexEnabled() {
     return this.getBooleanConfig("localHeaderIndex.enabled", true);
+  }
+
+  isIncludeCompletionPosition(document, position) {
+    return this.isContextCacheEnabled()
+      && this.isIncludeAssistEnabled()
+      && this.includeAssist.isCursorInIncludeRegion(document, position);
+  }
+
+  getStandardHeaderCandidates(includeCompletionMode) {
+    const directive = includeCompletionMode && includeCompletionMode.includeDirective;
+    if (!directive || directive.delimiter !== "<") {
+      return [];
+    }
+
+    return this.includeAssist.getStandardHeaderPrefixCandidates(directive.prefix).slice(0, 8);
+  }
+
+  getLocalHeaderCandidates(includeCompletionMode) {
+    const directive = includeCompletionMode && includeCompletionMode.includeDirective;
+    if (
+      !directive
+      || directive.delimiter !== "\""
+      || !this.localHeaderIndex
+      || typeof this.localHeaderIndex.lookupIncludePrefix !== "function"
+    ) {
+      return [];
+    }
+
+    return this.localHeaderIndex.lookupIncludePrefix(directive.prefix).slice(0, 8);
   }
 
   getMaxInjectedChars() {
@@ -190,7 +248,22 @@ function makeEmptySnapshot() {
     missingStandardIncludes: [],
     missingProjectIncludes: [],
     includeRegion: false,
+    includeCompletionMode: makeEmptyIncludeCompletionMode(),
+    standardHeaderCandidates: [],
+    localHeaderCandidates: [],
+    includeCompletion: undefined,
     promptSections: []
+  };
+}
+
+function makeEmptyIncludeCompletionMode() {
+  return {
+    cursorInIncludeRegion: false,
+    cursorInsideIncludeDirective: false,
+    cursorOnBlankLineInIncludeRegion: false,
+    missingIncludeDiagnosticAfterCursor: false,
+    hasMissingIncludeHints: false,
+    includeDirective: undefined
   };
 }
 

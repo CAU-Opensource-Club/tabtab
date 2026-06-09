@@ -2,6 +2,7 @@ const assert = require("assert").strict;
 const { DiagnosticsCache } = require("../src/context/diagnosticsCache");
 const { FimContextBuilder } = require("../src/context/fimContextBuilder");
 const { IncludeAssist, collectExistingIncludes, isCursorInIncludeRegion } = require("../src/context/includeAssist");
+const { InlineCompletionProvider } = require("../src/inlineCompletionProvider");
 const { LocalHeaderIndex, extractHeaderSymbolsFromText } = require("../src/context/localHeaderIndex");
 const { ProjectProfileCache } = require("../src/context/projectProfileCache");
 const { WorkspaceContextCache } = require("../src/context/workspaceContextCache");
@@ -187,6 +188,150 @@ test("IncludeAssist infers project-local include from undefined local symbol", (
   assert.equal(hints[0].symbol, "PacketBufferMeta");
 });
 
+test("IncludeAssist marks include mode and builds a deterministic missing include completion", () => {
+  const assist = new IncludeAssist();
+  const document = makeDocument({
+    text: [
+      "#include <string>",
+      "",
+      "void use() {",
+      "  std::vector<int> values;",
+      "}",
+      ""
+    ].join("\n"),
+    languageId: "cpp"
+  });
+  const position = { line: 1, character: 0 };
+  const missingStandardIncludes = assist.inferMissingStandardIncludes({
+    document,
+    position,
+    diagnostics: [
+      makeDiagnostic({
+        message: "no template named 'vector' in namespace 'std'",
+        line: 4,
+        severity: 0
+      })
+    ]
+  });
+  const mode = assist.getIncludeCompletionMode({
+    document,
+    position,
+    missingStandardIncludes,
+    missingProjectIncludes: []
+  });
+  const completion = assist.buildPreferredIncludeCompletion({
+    document,
+    position,
+    mode,
+    missingStandardIncludes,
+    missingProjectIncludes: []
+  });
+
+  assert.equal(mode.cursorInIncludeRegion, true);
+  assert.equal(mode.cursorOnBlankLineInIncludeRegion, true);
+  assert.equal(mode.missingIncludeDiagnosticAfterCursor, true);
+  assert.equal(completion.text, "#include <vector>\n");
+});
+
+test("IncludeAssist completes standard and local include prefixes", () => {
+  const assist = new IncludeAssist();
+  const standardDocument = makeDocument({
+    text: "#include <vec",
+    languageId: "cpp"
+  });
+  const standardPosition = { line: 0, character: "#include <vec".length };
+  const standardMode = assist.getIncludeCompletionMode({
+    document: standardDocument,
+    position: standardPosition,
+    missingStandardIncludes: [],
+    missingProjectIncludes: []
+  });
+  const standardCompletion = assist.buildPreferredIncludeCompletion({
+    document: standardDocument,
+    position: standardPosition,
+    mode: standardMode,
+    standardHeaderCandidates: assist.getStandardHeaderPrefixCandidates("vec"),
+    localHeaderCandidates: []
+  });
+
+  const localDocument = makeDocument({
+    text: "#include \"pack",
+    languageId: "cpp"
+  });
+  const localPosition = { line: 0, character: "#include \"pack".length };
+  const localMode = assist.getIncludeCompletionMode({
+    document: localDocument,
+    position: localPosition,
+    missingStandardIncludes: [],
+    missingProjectIncludes: []
+  });
+  const localCompletion = assist.buildPreferredIncludeCompletion({
+    document: localDocument,
+    position: localPosition,
+    mode: localMode,
+    standardHeaderCandidates: [],
+    localHeaderCandidates: [
+      {
+        includeText: "memory/packet_buffer.hpp",
+        headerUri: makeUri("/repo/include/memory/packet_buffer.hpp")
+      }
+    ]
+  });
+
+  assert.equal(standardCompletion.text, "tor>");
+  assert.equal(localCompletion.text, "memory/packet_buffer.hpp\"");
+  assert.deepEqual(localCompletion.replaceRange, {
+    start: {
+      line: 0,
+      character: "#include \"".length
+    },
+    end: localPosition
+  });
+});
+
+test("IncludeAssist does not treat a complete include line as an insertion point", () => {
+  const assist = new IncludeAssist();
+  const document = makeDocument({
+    text: [
+      "#include <string>",
+      "",
+      "void use() {",
+      "  std::vector<int> values;",
+      "}",
+      ""
+    ].join("\n"),
+    languageId: "cpp"
+  });
+  const position = { line: 0, character: "#include <string>".length };
+  const missingStandardIncludes = assist.inferMissingStandardIncludes({
+    document,
+    position,
+    diagnostics: [
+      makeDiagnostic({
+        message: "no template named 'vector' in namespace 'std'",
+        line: 4,
+        severity: 0
+      })
+    ]
+  });
+  const mode = assist.getIncludeCompletionMode({
+    document,
+    position,
+    missingStandardIncludes,
+    missingProjectIncludes: []
+  });
+
+  assert.equal(mode.cursorInIncludeRegion, true);
+  assert.equal(mode.cursorInsideIncludeDirective, false);
+  assert.equal(assist.buildPreferredIncludeCompletion({
+    document,
+    position,
+    mode,
+    missingStandardIncludes,
+    missingProjectIncludes: []
+  }), undefined);
+});
+
 test("FimContextBuilder adds include-region instruction only inside include region", () => {
   const builder = new FimContextBuilder();
   const baseSnapshot = {
@@ -291,9 +436,120 @@ test("LocalHeaderIndex refreshFile updates an existing header symbol entry", asy
   assert.equal(index.lookupSymbol("WorkerRuntime")[0].includeText, "memory/packet_buffer.hpp");
 });
 
+test("LocalHeaderIndex looks up headers by include path or basename prefix", async () => {
+  const packetUri = makeUri("/repo/include/memory/packet_buffer.hpp");
+  const workerUri = makeUri("/repo/include/runtime/worker.hpp");
+  const vscode = makeVscode({
+    fileText(uriToRead) {
+      if (uriToRead.toString() === packetUri.toString()) {
+        return "";
+      }
+      if (uriToRead.toString() === workerUri.toString()) {
+        return "struct Worker {};";
+      }
+      return "";
+    }
+  });
+  const index = new LocalHeaderIndex({ vscode });
+
+  await index.refreshFile(packetUri);
+  await index.refreshFile(workerUri);
+
+  assert.equal(index.lookupIncludePrefix("memory/pack")[0].includeText, "memory/packet_buffer.hpp");
+  assert.equal(index.lookupIncludePrefix("worker")[0].includeText, "runtime/worker.hpp");
+});
+
 test("LocalHeaderIndex excludes wildcard build directories on incremental refresh", () => {
   const index = new LocalHeaderIndex({ vscode: makeVscode() });
   assert.equal(index.isExcluded(makeUri("/repo/cmake-build-debug/generated.hpp")), true);
+});
+
+test("WorkspaceContextCache exposes deterministic include completion for diagnostics after cursor", async () => {
+  const uri = makeUri("/repo/src/main.cpp");
+  const vscode = makeVscode({
+    diagnostics: new Map([
+      [uri.toString(), [
+        makeDiagnostic({
+          message: "no template named 'vector' in namespace 'std'",
+          line: 4,
+          severity: 0
+        })
+      ]]
+    ])
+  });
+  const cache = new WorkspaceContextCache({
+    vscode,
+    context: makeContext(),
+    projectProfileService: {
+      getPromptProfile() {
+        return "";
+      }
+    }
+  });
+  const document = makeDocument({
+    uri,
+    text: [
+      "#include <string>",
+      "",
+      "void use() {",
+      "  std::vector<int> values;",
+      "}",
+      ""
+    ].join("\n"),
+    languageId: "cpp"
+  });
+
+  const snapshot = await cache.buildSnapshot(
+    document,
+    { line: 1, character: 0 },
+    { isCancellationRequested: false }
+  );
+
+  assert.equal(snapshot.includeCompletion.text, "#include <vector>\n");
+  assert.equal(snapshot.includeCompletionMode.missingIncludeDiagnosticAfterCursor, true);
+});
+
+test("InlineCompletionProvider allows automatic completion on blank include-region lines", () => {
+  const document = makeDocument({
+    text: [
+      "#include <string>",
+      "",
+      "int main();",
+      ""
+    ].join("\n"),
+    languageId: "cpp"
+  });
+  const position = { line: 1, character: 0 };
+  const vscode = makeVscode({
+    activeTextEditor: {
+      document,
+      selection: {
+        isEmpty: true,
+        active: position
+      }
+    }
+  });
+  const provider = new InlineCompletionProvider({
+    vscode,
+    output: makeOutput(),
+    readRuntimeConfig() {
+      return {};
+    },
+    workspaceContextCache: {
+      isIncludeCompletionPosition() {
+        return true;
+      }
+    },
+    defaults: {}
+  });
+
+  assert.equal(provider.canProvide(
+    document,
+    position,
+    { triggerKind: vscode.InlineCompletionTriggerKind.Automatic },
+    { isCancellationRequested: false },
+    { enabled: true }
+  ), true);
 });
 
 function makeVscode(options = {}) {
@@ -325,6 +581,34 @@ function makeVscode(options = {}) {
       Information: 2,
       Hint: 3
     },
+    InlineCompletionTriggerKind: {
+      Automatic: 0,
+      Invoke: 1
+    },
+    InlineCompletionItem: class InlineCompletionItem {
+      constructor(insertText, range) {
+        this.insertText = insertText;
+        this.range = range;
+      }
+    },
+    Range: class Range {
+      constructor(startOrLine, startCharacterOrEnd, endLine, endCharacter) {
+        if (typeof startOrLine === "number") {
+          this.start = {
+            line: startOrLine,
+            character: startCharacterOrEnd
+          };
+          this.end = {
+            line: endLine,
+            character: endCharacter
+          };
+          return;
+        }
+
+        this.start = startOrLine;
+        this.end = startCharacterOrEnd;
+      }
+    },
     SymbolKind: {
       Namespace: 3,
       Class: 4,
@@ -332,6 +616,9 @@ function makeVscode(options = {}) {
       Interface: 11,
       Struct: 22,
       TypeAlias: 25
+    },
+    window: {
+      activeTextEditor: options.activeTextEditor
     },
     languages: {
       getDiagnostics(uri) {
@@ -368,6 +655,12 @@ function makeVscode(options = {}) {
         return undefined;
       }
     }
+  };
+}
+
+function makeOutput() {
+  return {
+    appendLine() {}
   };
 }
 

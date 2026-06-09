@@ -97,6 +97,7 @@ class IncludeAssist {
           header,
           symbol: symbolHint.symbol,
           line: getDiagnosticLine(diagnostic),
+          afterCursor: isDiagnosticAfterPosition(diagnostic, position),
           source: diagnostic.source,
           message: String(diagnostic.message || ""),
           severity: diagnostic.severity,
@@ -129,6 +130,7 @@ class IncludeAssist {
             includeText,
             symbol: symbolHint.symbol,
             line: getDiagnosticLine(diagnostic),
+            afterCursor: isDiagnosticAfterPosition(diagnostic, position),
             source: diagnostic.source,
             message: String(diagnostic.message || ""),
             severity: diagnostic.severity,
@@ -154,6 +156,80 @@ class IncludeAssist {
 
   isCursorInIncludeRegion(document, position) {
     return isCursorInIncludeRegion(document, position);
+  }
+
+  getIncludeCompletionMode({ document, position, missingStandardIncludes, missingProjectIncludes } = {}) {
+    const cursorInIncludeRegion = isCursorInIncludeRegion(document, position);
+    const includeDirective = getIncludeDirectiveAtCursor(document, position);
+    const cursorInsideIncludeDirective = Boolean(includeDirective);
+    const cursorOnBlankLineInIncludeRegion = cursorInIncludeRegion && isCursorOnBlankLine(document, position);
+    const hasMissingIncludeHints = hasIncludeHints(missingStandardIncludes, missingProjectIncludes);
+    const missingIncludeDiagnosticAfterCursor = [...(missingStandardIncludes || []), ...(missingProjectIncludes || [])]
+      .some((hint) => hint && hint.afterCursor === true);
+
+    return {
+      cursorInIncludeRegion,
+      cursorInsideIncludeDirective,
+      cursorOnBlankLineInIncludeRegion,
+      missingIncludeDiagnosticAfterCursor,
+      hasMissingIncludeHints,
+      includeDirective
+    };
+  }
+
+  getStandardHeaderPrefixCandidates(prefix) {
+    const normalized = normalizeIncludePrefix(prefix);
+    if (!normalized) {
+      return [];
+    }
+
+    const headers = [...new Set(Object.values(STANDARD_SYMBOL_HEADERS))];
+    return headers
+      .filter((header) => stripIncludeDelimiters(header).toLowerCase().startsWith(normalized))
+      .sort((a, b) => stripIncludeDelimiters(a).localeCompare(stripIncludeDelimiters(b)))
+      .map((header) => ({ header }));
+  }
+
+  buildPreferredIncludeCompletion({
+    document,
+    position,
+    mode,
+    missingStandardIncludes,
+    missingProjectIncludes,
+    standardHeaderCandidates,
+    localHeaderCandidates
+  } = {}) {
+    if (!mode || !mode.cursorInIncludeRegion) {
+      return undefined;
+    }
+
+    const includeDirective = mode.includeDirective;
+    const explicitPrefix = includeDirective && includeDirective.prefix;
+    if (explicitPrefix && includeDirective.delimiter === "\"") {
+      const candidate = firstNewQuoteInclude(document, localHeaderCandidates);
+      return candidate
+        ? makeIncludeCompletion(document, position, mode, quoteInclude(candidate.includeText), "localPrefix")
+        : undefined;
+    }
+
+    if (explicitPrefix && includeDirective.delimiter === "<") {
+      const candidate = firstNewAngleInclude(document, standardHeaderCandidates);
+      return candidate
+        ? makeIncludeCompletion(document, position, mode, candidate.header, "standardPrefix")
+        : undefined;
+    }
+
+    if (
+      mode.hasMissingIncludeHints
+      && (mode.cursorOnBlankLineInIncludeRegion || mode.cursorInsideIncludeDirective || mode.missingIncludeDiagnosticAfterCursor)
+    ) {
+      const missingInclude = pickPreferredMissingInclude(missingStandardIncludes, missingProjectIncludes);
+      if (missingInclude && missingInclude.confidence === "high") {
+        return makeIncludeCompletion(document, position, mode, getHintIncludeText(missingInclude), "missingInclude");
+      }
+    }
+
+    return undefined;
   }
 }
 
@@ -293,6 +369,45 @@ function isCursorInIncludeRegion(document, position) {
   return false;
 }
 
+function getIncludeDirectiveAtCursor(document, position) {
+  if (!document || !position || typeof document.lineAt !== "function") {
+    return undefined;
+  }
+
+  const line = document.lineAt(position.line).text || "";
+  const linePrefix = line.slice(0, Math.max(0, position.character));
+  const lineSuffix = line.slice(Math.max(0, position.character));
+  let match = linePrefix.match(/^\s*#\s*include\s*([<"])([^>"]*)$/);
+  if (match) {
+    return {
+      delimiter: match[1],
+      prefix: match[2],
+      linePrefix,
+      lineSuffix
+    };
+  }
+
+  match = linePrefix.match(/^\s*#\s*include\s*$/);
+  if (match) {
+    return {
+      delimiter: "",
+      prefix: "",
+      linePrefix,
+      lineSuffix
+    };
+  }
+
+  return undefined;
+}
+
+function isCursorOnBlankLine(document, position) {
+  if (!document || !position || typeof document.lineAt !== "function") {
+    return false;
+  }
+
+  return !String(document.lineAt(position.line).text || "").trim();
+}
+
 function classifyPreambleLine(line, inBlockComment) {
   const text = String(line || "").trim();
 
@@ -346,6 +461,18 @@ function sortAndDedupeHints(hints, position, keyOf) {
 }
 
 function compareGenericHints(a, b, position) {
+  const afterCursor = compareAfterCursor(a, b);
+  if (afterCursor !== 0) {
+    return afterCursor;
+  }
+
+  if (a && b && a.afterCursor === true && b.afterCursor === true) {
+    const distance = distanceToPosition(a, position) - distanceToPosition(b, position);
+    if (distance !== 0) {
+      return distance;
+    }
+  }
+
   const severity = compareSeverity(a.severity, b.severity);
   if (severity !== 0) {
     return severity;
@@ -357,6 +484,10 @@ function compareGenericHints(a, b, position) {
   }
 
   return distanceToPosition(a, position) - distanceToPosition(b, position);
+}
+
+function compareAfterCursor(a, b) {
+  return (b && b.afterCursor === true ? 1 : 0) - (a && a.afterCursor === true ? 1 : 0);
 }
 
 function compareProjectHints(a, b, position) {
@@ -415,6 +546,137 @@ function projectLocalityScore(hint) {
 function quoteInclude(value) {
   const normalized = normalizeQuoteInclude(value);
   return normalized ? `"${normalized}"` : "";
+}
+
+function firstNewQuoteInclude(document, candidates) {
+  const existing = collectExistingIncludes(document);
+  for (const candidate of candidates || []) {
+    const includeText = candidate && candidate.includeText ? candidate.includeText : "";
+    if (includeText && !existing.quoteIncludes.has(normalizeQuoteInclude(includeText))) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function firstNewAngleInclude(document, candidates) {
+  const existing = collectExistingIncludes(document);
+  for (const candidate of candidates || []) {
+    const header = candidate && candidate.header ? candidate.header : "";
+    if (header && !existing.angleIncludes.has(header)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function pickPreferredMissingInclude(missingStandardIncludes, missingProjectIncludes) {
+  const candidates = [
+    ...(missingStandardIncludes || []).map((hint) => ({ ...hint, includeText: hint.header })),
+    ...(missingProjectIncludes || [])
+  ].filter((hint) => hint && getHintIncludeText(hint));
+
+  if (!candidates.length) {
+    return undefined;
+  }
+
+  return candidates.sort((a, b) => compareGenericHints(a, b, undefined))[0];
+}
+
+function getHintIncludeText(hint) {
+  return hint && (hint.header || hint.includeText) ? (hint.header || hint.includeText) : "";
+}
+
+function makeIncludeCompletion(document, position, mode, includeText, source) {
+  const insertion = buildIncludeInsertion(document, position, mode, includeText);
+  return insertion && insertion.text
+    ? { ...insertion, includeText, source }
+    : undefined;
+}
+
+function buildIncludeInsertion(document, position, mode, includeText) {
+  if (!document || !position || typeof document.lineAt !== "function" || !includeText) {
+    return undefined;
+  }
+
+  const line = document.lineAt(position.line).text || "";
+  const linePrefix = line.slice(0, Math.max(0, position.character));
+  const lineSuffix = line.slice(Math.max(0, position.character));
+  const directive = mode && mode.includeDirective;
+
+  if (directive && directive.delimiter) {
+    const body = stripIncludeDelimiters(includeText);
+    const prefix = String(directive.prefix || "");
+    const closing = directive.delimiter === "<" ? ">" : "\"";
+    const closingText = lineSuffix.trimStart().startsWith(closing) ? "" : closing;
+    if (body.toLowerCase().startsWith(prefix.toLowerCase())) {
+      return {
+        text: `${body.slice(prefix.length)}${closingText}`
+      };
+    }
+
+    if (pathBasename(body).toLowerCase().startsWith(prefix.toLowerCase())) {
+      return {
+        text: `${body}${closingText}`,
+        replaceRange: {
+          start: {
+            line: position.line,
+            character: Math.max(0, position.character - prefix.length)
+          },
+          end: {
+            line: position.line,
+            character: position.character
+          }
+        }
+      };
+    }
+
+    return undefined;
+  }
+
+  if (directive) {
+    return { text: includeText };
+  }
+
+  if (linePrefix.trim() || lineSuffix.trim()) {
+    return undefined;
+  }
+
+  return { text: `#include ${includeText}\n` };
+}
+
+function stripIncludeDelimiters(value) {
+  return String(value || "")
+    .replace(/^<|>$/g, "")
+    .replace(/^["']|["']$/g, "")
+    .trim();
+}
+
+function normalizeIncludePrefix(prefix) {
+  return stripIncludeDelimiters(prefix).toLowerCase();
+}
+
+function pathBasename(value) {
+  const normalized = String(value || "").replace(/\\/g, "/");
+  const index = normalized.lastIndexOf("/");
+  return index >= 0 ? normalized.slice(index + 1) : normalized;
+}
+
+function hasIncludeHints(missingStandardIncludes, missingProjectIncludes) {
+  return Boolean(
+    (missingStandardIncludes && missingStandardIncludes.length)
+    || (missingProjectIncludes && missingProjectIncludes.length)
+  );
+}
+
+function isDiagnosticAfterPosition(diagnostic, position) {
+  if (!diagnostic || !diagnostic.range || !diagnostic.range.start || !position) {
+    return false;
+  }
+
+  const start = diagnostic.range.start;
+  return start.line > position.line
+    || (start.line === position.line && start.character >= position.character);
 }
 
 function normalizeQuoteInclude(value) {

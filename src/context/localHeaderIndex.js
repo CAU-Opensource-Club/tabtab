@@ -16,6 +16,7 @@ class LocalHeaderIndex {
     this.vscode = vscode;
     this.output = output;
     this.fileSymbols = new Map();
+    this.headerFiles = new Map();
     this.symbolIndex = new Map();
     this.disposables = [];
     this.pendingFileRefreshes = new Map();
@@ -64,6 +65,7 @@ class LocalHeaderIndex {
     }
 
     this.fileSymbols.clear();
+    this.headerFiles.clear();
     this.symbolIndex.clear();
     this.ready = false;
     this.initialized = false;
@@ -103,7 +105,13 @@ class LocalHeaderIndex {
       return;
     }
 
-    const symbols = await this.extractSymbols(uri);
+    const includeText = this.getIncludeText(uri);
+    this.headerFiles.set(uri.toString(), {
+      headerUri: uri,
+      includeText
+    });
+
+    const symbols = await this.extractSymbols(uri, includeText);
     this.setFileSymbols(uri, symbols);
     this.ready = true;
   }
@@ -115,6 +123,7 @@ class LocalHeaderIndex {
 
     const key = uri.toString();
     this.fileSymbols.delete(key);
+    this.headerFiles.delete(key);
     this.rebuildSymbolIndex();
   }
 
@@ -124,6 +133,22 @@ class LocalHeaderIndex {
     }
 
     return [...(this.symbolIndex.get(name) || [])];
+  }
+
+  lookupIncludePrefix(prefix) {
+    const normalized = normalizeIncludePrefix(prefix);
+    if (!normalized) {
+      return [];
+    }
+
+    return [...this.headerFiles.values()]
+      .map((entry) => ({
+        ...entry,
+        score: includePrefixScore(entry.includeText, normalized)
+      }))
+      .filter((entry) => entry.score > 0)
+      .sort(compareIncludePrefixMatches)
+      .map(({ score, ...entry }) => entry);
   }
 
   scheduleRefreshFile(uri) {
@@ -145,16 +170,16 @@ class LocalHeaderIndex {
     }, 500));
   }
 
-  async extractSymbols(uri) {
-    const symbolProviderSymbols = await this.extractWithSymbolProvider(uri);
+  async extractSymbols(uri, includeText = this.getIncludeText(uri)) {
+    const symbolProviderSymbols = await this.extractWithSymbolProvider(uri, includeText);
     if (symbolProviderSymbols.length) {
       return symbolProviderSymbols;
     }
 
-    return this.extractWithRegex(uri);
+    return this.extractWithRegex(uri, includeText);
   }
 
-  async extractWithSymbolProvider(uri) {
+  async extractWithSymbolProvider(uri, includeText = this.getIncludeText(uri)) {
     const commands = this.vscode && this.vscode.commands;
     if (!commands || typeof commands.executeCommand !== "function") {
       return [];
@@ -166,19 +191,19 @@ class LocalHeaderIndex {
         vscode: this.vscode,
         symbols,
         uri,
-        includeText: this.getIncludeText(uri)
+        includeText
       });
     } catch (error) {
       return [];
     }
   }
 
-  async extractWithRegex(uri) {
+  async extractWithRegex(uri, includeText = this.getIncludeText(uri)) {
     const text = await this.readUriText(uri);
     return extractHeaderSymbolsFromText({
       text,
       uri,
-      includeText: this.getIncludeText(uri),
+      includeText,
       vscode: this.vscode
     });
   }
@@ -446,6 +471,38 @@ function compareHeaderSymbols(a, b) {
   }
 
   return String(a.includeText || "").localeCompare(String(b.includeText || ""));
+}
+
+function includePrefixScore(includeText, normalizedPrefix) {
+  const normalizedInclude = normalizePath(includeText).toLowerCase();
+  const basename = path.basename(normalizedInclude);
+
+  if (normalizedInclude.startsWith(normalizedPrefix)) {
+    return 3;
+  }
+
+  if (basename.startsWith(normalizedPrefix)) {
+    return 2;
+  }
+
+  return 0;
+}
+
+function compareIncludePrefixMatches(a, b) {
+  const score = (b.score || 0) - (a.score || 0);
+  if (score !== 0) {
+    return score;
+  }
+
+  return String(a.includeText || "").localeCompare(String(b.includeText || ""));
+}
+
+function normalizeIncludePrefix(value) {
+  return normalizePath(value)
+    .replace(/^["']|["']$/g, "")
+    .replace(/^\.\//, "")
+    .trim()
+    .toLowerCase();
 }
 
 function publicHeaderScore(symbol) {

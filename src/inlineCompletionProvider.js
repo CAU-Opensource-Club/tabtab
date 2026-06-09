@@ -153,23 +153,29 @@ class InlineCompletionProvider {
       }
 
       request.phase = "building";
+      const workspaceSnapshot = this.workspaceContextCache
+        ? await this.workspaceContextCache.buildSnapshot(document, position, requestToken)
+        : { promptSections: [] };
+
+      const includeCompletion = workspaceSnapshot && workspaceSnapshot.includeCompletion
+        ? workspaceSnapshot.includeCompletion
+        : undefined;
+      if (includeCompletion && includeCompletion.text && !this.isStale(document, documentVersion, request)) {
+        return this.makeInlineCompletionResult(includeCompletion.text, position, includeCompletion.replaceRange);
+      }
+
       const runtimeConfig = await this.readRuntimeConfig();
       if (!runtimeConfig || !runtimeConfig.apiKey) {
         this.logError("Missing API key. Set apiKey in tabtab.config.json.");
         return undefined;
       }
 
-      const [fimContext, workspaceSnapshot] = await Promise.all([
-        this.contextBuilder.build({
-          document,
-          position,
-          token: requestToken,
-          config
-        }),
-        this.workspaceContextCache
-          ? this.workspaceContextCache.buildSnapshot(document, position, requestToken)
-          : Promise.resolve({ promptSections: [] })
-      ]);
+      const fimContext = await this.contextBuilder.build({
+        document,
+        position,
+        token: requestToken,
+        config
+      });
       fimContext.cachedContextSections = workspaceSnapshot && Array.isArray(workspaceSnapshot.promptSections)
         ? workspaceSnapshot.promptSections
         : [];
@@ -206,14 +212,7 @@ class InlineCompletionProvider {
         return undefined;
       }
 
-      return {
-        items: [
-          new this.vscode.InlineCompletionItem(
-            completion,
-            new this.vscode.Range(position, position)
-          )
-        ]
-      };
+      return this.makeInlineCompletionResult(completion, position);
     } catch (error) {
       if (error && (error.name === "AbortError" || error.message === "cancelled")) {
         return undefined;
@@ -255,7 +254,7 @@ class InlineCompletionProvider {
       const linePrefix = line.slice(0, position.character);
       const lineSuffix = line.slice(position.character);
       if (!linePrefix.trim()) {
-        return false;
+        return this.isIncludeCompletionPosition(document, position);
       }
 
       if (looksLikeCompleteStatementEnd(linePrefix, lineSuffix)) {
@@ -264,6 +263,34 @@ class InlineCompletionProvider {
     }
 
     return true;
+  }
+
+  makeInlineCompletionResult(completion, position, replaceRange) {
+    const range = replaceRange
+      ? new this.vscode.Range(
+        replaceRange.start.line,
+        replaceRange.start.character,
+        replaceRange.end.line,
+        replaceRange.end.character
+      )
+      : new this.vscode.Range(position, position);
+
+    return {
+      items: [
+        new this.vscode.InlineCompletionItem(
+          completion,
+          range
+        )
+      ]
+    };
+  }
+
+  isIncludeCompletionPosition(document, position) {
+    return Boolean(
+      this.workspaceContextCache
+      && typeof this.workspaceContextCache.isIncludeCompletionPosition === "function"
+      && this.workspaceContextCache.isIncludeCompletionPosition(document, position)
+    );
   }
 
   isStale(document, documentVersion, request) {
