@@ -3,7 +3,7 @@ const { CompletionPostProcessor } = require("../src/completionPostProcessor");
 const { DiagnosticsCache } = require("../src/context/diagnosticsCache");
 const { FimContextBuilder } = require("../src/context/fimContextBuilder");
 const { IncludeAssist, collectExistingIncludes, isCursorInIncludeRegion } = require("../src/context/includeAssist");
-const { FimClient } = require("../src/fimClient");
+const { FimClient, buildFimPrompt } = require("../src/fimClient");
 const { InlineCompletionProvider } = require("../src/inlineCompletionProvider");
 const { LocalHeaderIndex, extractHeaderSymbolsFromText } = require("../src/context/localHeaderIndex");
 const { ProjectProfileCache } = require("../src/context/projectProfileCache");
@@ -400,6 +400,52 @@ test("FimClient sends long suffix lines as provider stop sequences", () => {
     "  writer.write(serializedResponse);"
   ]);
   assert.deepEqual(anthropicRequest.body.stop_sequences, openAiRequest.body.stop);
+});
+
+test("buildFimPrompt orders stable and dynamic sections without cursor coordinates", () => {
+  const prompt = buildFimPrompt({
+    projectProfile: "C++ project using compact inline completions.",
+    cachedContextSections: [
+      "Current file diagnostics near cursor:\n- Error clangd line 7: no member named value"
+    ],
+    extraContext: "// Related context\nvoid helper();",
+    prefix: "int main() {\n  ",
+    suffix: "\n}",
+    metadata: {
+      languageId: "cpp",
+      fileName: "main.cpp",
+      line: 42,
+      character: 9,
+      cursorComment: {
+        inside: false
+      }
+    }
+  });
+  const orderedMarkers = [
+    "Fill the cursor gap using FIM.",
+    "<project_profile>",
+    "<workspace_strategy>",
+    "<metadata>",
+    "<diagnostics_context>",
+    "<extra_context>",
+    "<fim_prefix>",
+    "<fim_suffix>"
+  ];
+  const positions = orderedMarkers.map((marker) => prompt.indexOf(marker));
+
+  for (const position of positions) {
+    assert.notEqual(position, -1);
+  }
+
+  for (let index = 1; index < positions.length; index += 1) {
+    assert.ok(positions[index - 1] < positions[index]);
+  }
+
+  assert.match(prompt, /Language: cpp/);
+  assert.match(prompt, /File: main\.cpp/);
+  assert.equal(prompt.includes("Cursor: line"), false);
+  assert.equal(prompt.includes("line 42"), false);
+  assert.equal(prompt.includes("column 9"), false);
 });
 
 test("CompletionPostProcessor removes repeated prefix blocks", () => {

@@ -1,6 +1,5 @@
 const DEFAULT_LIMITS = {
   maxInjectedChars: 1200,
-  maxProjectProfileChars: 300,
   maxStandardIncludes: 5,
   maxProjectIncludes: 3,
   maxDiagnostics: 8
@@ -13,10 +12,6 @@ class FimContextBuilder {
       ...options
     };
     const sections = [];
-
-    if (snapshot && snapshot.projectProfile) {
-      sections.push(formatProjectProfile(snapshot.projectProfile, limits.maxProjectProfileChars));
-    }
 
     if (snapshot && Array.isArray(snapshot.missingStandardIncludes) && snapshot.missingStandardIncludes.length) {
       sections.push(formatStandardIncludeHints(snapshot.missingStandardIncludes.slice(0, limits.maxStandardIncludes)));
@@ -43,11 +38,6 @@ class FimContextBuilder {
 
     return fitSections(sections.filter(Boolean), limits.maxInjectedChars);
   }
-}
-
-function formatProjectProfile(profile, maxChars) {
-  const value = sanitizeSingleLine(profile).slice(0, Math.max(0, maxChars || 0)).trim();
-  return value ? `Project profile: ${value}` : "";
 }
 
 function formatStandardIncludeHints(hints) {

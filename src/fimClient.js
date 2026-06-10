@@ -1,4 +1,14 @@
 const DEFAULT_PROVIDER = "openai";
+const FIXED_FIM_RULES = [
+  "Fill the cursor gap using FIM.",
+  "Return only the inserted text.",
+  "Do not return Markdown, explanations, tags, or code that already exists in prefix or suffix.",
+  "Prefer a short local completion. The returned text will be inserted exactly at <cursor>."
+];
+const WORKSPACE_STRATEGY = [
+  "Use project profile, diagnostics, and related context as supporting information for the cursor completion.",
+  "Prefer the current file prefix and suffix when workspace context conflicts with local code."
+];
 
 class FimClient {
   constructor(options = {}) {
@@ -139,29 +149,21 @@ class FimClient {
 
 function buildFimPrompt(context) {
   const metadata = context.metadata || {};
-  const cachedContextSections = Array.isArray(context.cachedContextSections)
+  const diagnosticContextSections = Array.isArray(context.cachedContextSections)
     ? context.cachedContextSections.map((section) => String(section || "").trim()).filter(Boolean)
     : [];
   const extra = context.extraContext && context.extraContext.trim()
     ? ["<extra_context>", context.extraContext, "</extra_context>", ""]
     : [];
-  const cursorInstructions = buildCursorInstructions(metadata);
   const projectProfile = sanitizeProjectProfile(context.projectProfile);
-  const projectProfileLines = projectProfile ? [`Project profile: ${projectProfile}`] : [];
 
   return [
-    `Language: ${metadata.languageId || "unknown"}`,
-    `File: ${metadata.fileName || "unknown"}`,
-    `Cursor: line ${metadata.line || 0}, column ${metadata.character || 0}`,
-    ...projectProfileLines,
+    ...FIXED_FIM_RULES,
     "",
-    "Fill the cursor gap using FIM.",
-    "Return only the inserted text.",
-    "Do not return Markdown, explanations, tags, or code that already exists in prefix or suffix.",
-    "Prefer a short local completion. The returned text will be inserted exactly at <cursor>.",
-    ...cursorInstructions,
-    "",
-    ...formatCachedContextSections(cachedContextSections),
+    ...formatProjectProfileSection(projectProfile),
+    ...formatWorkspaceStrategySection(),
+    ...formatMetadataSection(metadata),
+    ...formatDiagnosticContextSections(diagnosticContextSections),
     ...extra,
     "<fim_prefix>",
     context.prefix || "",
@@ -204,19 +206,56 @@ function isUsefulStopSequence(line) {
   const text = String(line || "").trim();
 
   return text.length >= 24
-    && !/^<\/?(fim_prefix|fim_suffix|extra_context|before_cursor|after_cursor|cursor)>$/i.test(text)
+    && !/^<\/?(fim_prefix|fim_suffix|project_profile|workspace_strategy|metadata|diagnostics_context|extra_context|before_cursor|after_cursor|cursor)>$/i.test(text)
     && !/^[{}()[\],;.\s]+$/.test(text);
 }
 
-function formatCachedContextSections(sections) {
+function formatProjectProfileSection(projectProfile) {
+  if (!projectProfile) {
+    return [];
+  }
+
+  return [
+    "<project_profile>",
+    `Project profile: ${projectProfile}`,
+    "</project_profile>",
+    ""
+  ];
+}
+
+function formatWorkspaceStrategySection() {
+  return [
+    "<workspace_strategy>",
+    WORKSPACE_STRATEGY.join("\n"),
+    "</workspace_strategy>",
+    ""
+  ];
+}
+
+function formatMetadataSection(metadata) {
+  const lines = [
+    `Language: ${metadata.languageId || "unknown"}`,
+    `File: ${metadata.fileName || "unknown"}`,
+    ...buildCursorInstructions(metadata)
+  ];
+
+  return [
+    "<metadata>",
+    lines.join("\n"),
+    "</metadata>",
+    ""
+  ];
+}
+
+function formatDiagnosticContextSections(sections) {
   if (!sections.length) {
     return [];
   }
 
   return [
-    "<workspace_context>",
+    "<diagnostics_context>",
     sections.join("\n\n"),
-    "</workspace_context>",
+    "</diagnostics_context>",
     ""
   ];
 }
@@ -243,7 +282,7 @@ function sanitizeProjectProfile(value) {
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 200);
+    .slice(0, 300);
 }
 
 function normalizeNewlines(text) {

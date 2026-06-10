@@ -176,6 +176,9 @@ class InlineCompletionProvider {
         token: requestToken,
         config
       });
+      fimContext.projectProfile = workspaceSnapshot && workspaceSnapshot.projectProfile
+        ? workspaceSnapshot.projectProfile
+        : "";
       fimContext.cachedContextSections = workspaceSnapshot && Array.isArray(workspaceSnapshot.promptSections)
         ? workspaceSnapshot.promptSections
         : [];

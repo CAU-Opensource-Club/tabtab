@@ -2,7 +2,7 @@
   "name": "tabtab",
   "displayName": "TabTab",
   "description": "Minimal inline code completion for OpenAI-compatible and Anthropic-compatible APIs.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "local",
   "scripts": {
     "test": "node test/contextCache.test.js"

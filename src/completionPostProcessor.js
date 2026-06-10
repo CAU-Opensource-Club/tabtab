@@ -43,7 +43,7 @@ function stripCodeFences(text) {
 
 function stripFimTags(text) {
   return text
-    .replace(/<\/?(fim_prefix|fim_suffix|extra_context|before_cursor|after_cursor|cursor)>/gi, "")
+    .replace(/<\/?(fim_prefix|fim_suffix|project_profile|workspace_strategy|metadata|diagnostics_context|extra_context|before_cursor|after_cursor|cursor)>/gi, "")
     .replace(/<\|fim_middle\|>|<\|fim_suffix\|>|<\|fim_prefix\|>/gi, "");
 }
 
