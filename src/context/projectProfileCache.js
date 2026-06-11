@@ -1,4 +1,7 @@
+const { sanitizeSingleLine } = require("../shared/textUtils");
+
 const MANIFEST_GLOB = "**/{package.json,pyproject.toml,Cargo.toml,CMakeLists.txt,go.mod,tsconfig.json,compile_commands.json}";
+const PROFILE_MAX_CHARS = 300;
 
 class ProjectProfileCache {
   constructor({ vscode, projectProfileService } = {}) {
@@ -72,7 +75,7 @@ class ProjectProfileCache {
       this.projectProfileService
       && typeof this.projectProfileService.getManualProfile === "function"
     ) {
-      const manualProfile = sanitizeProjectProfile(this.projectProfileService.getManualProfile());
+      const manualProfile = sanitizeSingleLine(this.projectProfileService.getManualProfile(), PROFILE_MAX_CHARS);
       if (manualProfile) {
         return manualProfile;
       }
@@ -85,7 +88,7 @@ class ProjectProfileCache {
     ) {
       const workspaceFolder = this.projectProfileService.getWorkspaceFolderForDocument(document);
       const entry = workspaceFolder ? this.projectProfileService.getCachedEntry(workspaceFolder) : undefined;
-      return sanitizeProjectProfile(entry && entry.profile);
+      return sanitizeSingleLine(entry && entry.profile, PROFILE_MAX_CHARS);
     }
 
     return "";
@@ -103,15 +106,6 @@ class ProjectProfileCache {
   }
 }
 
-function sanitizeProjectProfile(value) {
-  return String(value || "")
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 300);
-}
-
 module.exports = {
-  ProjectProfileCache,
-  sanitizeProjectProfile
+  ProjectProfileCache
 };

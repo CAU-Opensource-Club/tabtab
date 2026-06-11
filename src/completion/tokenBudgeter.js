@@ -1,3 +1,5 @@
+const { normalizeNewlines } = require("../shared/textUtils");
+
 class TokenBudgeter {
   constructor(options = {}) {
     this.maxPromptTokens = options.maxPromptTokens || 8192;
@@ -78,7 +80,7 @@ class TokenBudgeter {
   }
 
   trimFromStart(text, maxTokens) {
-    const normalized = normalizeText(text);
+    const normalized = normalizeNewlines(text);
     if (!normalized || this.estimateTokens(normalized) <= maxTokens) {
       return normalized;
     }
@@ -95,7 +97,7 @@ class TokenBudgeter {
   }
 
   trimFromEnd(text, maxTokens) {
-    const normalized = normalizeText(text);
+    const normalized = normalizeNewlines(text);
     if (!normalized || this.estimateTokens(normalized) <= maxTokens) {
       return normalized;
     }
@@ -110,10 +112,6 @@ class TokenBudgeter {
 
     return trimmed.trimEnd();
   }
-}
-
-function normalizeText(text) {
-  return typeof text === "string" ? text.replace(/\r\n/g, "\n") : "";
 }
 
 module.exports = {

@@ -1,10 +1,12 @@
 const assert = require("assert").strict;
-const { CompletionPostProcessor } = require("../src/completionPostProcessor");
+const { FimClient } = require("../src/api/fimClient");
+const { buildFimPrompt } = require("../src/api/fimPrompt");
+const { CompletionPostProcessor } = require("../src/completion/completionPostProcessor");
+const { InlineCompletionProvider } = require("../src/completion/inlineCompletionProvider");
+const { RelatedFileSelector } = require("../src/completion/relatedFileSelector");
 const { DiagnosticsCache } = require("../src/context/diagnosticsCache");
 const { FimContextBuilder } = require("../src/context/fimContextBuilder");
 const { IncludeAssist, collectExistingIncludes, isCursorInIncludeRegion } = require("../src/context/includeAssist");
-const { FimClient, buildFimPrompt } = require("../src/fimClient");
-const { InlineCompletionProvider } = require("../src/inlineCompletionProvider");
 const { LocalHeaderIndex, extractHeaderSymbolsFromText } = require("../src/context/localHeaderIndex");
 const { ProjectProfileCache } = require("../src/context/projectProfileCache");
 const { WorkspaceContextCache } = require("../src/context/workspaceContextCache");
@@ -606,9 +608,72 @@ test("LocalHeaderIndex looks up headers by include path or basename prefix", asy
   assert.equal(index.lookupIncludePrefix("worker")[0].includeText, "runtime/worker.hpp");
 });
 
+test("LocalHeaderIndex removeFile keeps same-name symbols from other headers", async () => {
+  const firstUri = makeUri("/repo/include/a/packet.hpp");
+  const secondUri = makeUri("/repo/include/b/packet.hpp");
+  const vscode = makeVscode({
+    fileText(uriToRead) {
+      if (uriToRead.toString() === firstUri.toString()) {
+        return "struct Packet {};";
+      }
+      if (uriToRead.toString() === secondUri.toString()) {
+        return "struct Packet {};";
+      }
+      return "";
+    }
+  });
+  const index = new LocalHeaderIndex({ vscode });
+
+  await index.refreshFile(firstUri);
+  await index.refreshFile(secondUri);
+  assert.equal(index.lookupSymbol("Packet").length, 2);
+
+  index.removeFile(firstUri);
+  const remaining = index.lookupSymbol("Packet");
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0].includeText, "b/packet.hpp");
+});
+
 test("LocalHeaderIndex excludes wildcard build directories on incremental refresh", () => {
   const index = new LocalHeaderIndex({ vscode: makeVscode() });
   assert.equal(index.isExcluded(makeUri("/repo/cmake-build-debug/generated.hpp")), true);
+});
+
+test("RelatedFileSelector reads an open related document once", () => {
+  const currentDocument = makeDocument({
+    uri: makeUri("/repo/src/main.cpp"),
+    text: "void use(PacketBufferMeta value);",
+    languageId: "cpp"
+  });
+  let readCount = 0;
+  const relatedDocument = {
+    uri: makeUri("/repo/include/memory/packet_buffer.hpp"),
+    languageId: "cpp",
+    getText() {
+      readCount += 1;
+      return [
+        "#pragma once",
+        "namespace memory {",
+        "struct PacketBufferMeta {};",
+        "}",
+        ""
+      ].join("\n");
+    }
+  };
+  const selector = new RelatedFileSelector({
+    vscode: makeVscode({
+      textDocuments: [currentDocument, relatedDocument]
+    })
+  });
+  const candidates = [];
+
+  selector.addOpenDocumentCandidates(candidates, currentDocument, ["PacketBufferMeta"], {
+    maxRelatedFileBytes: 262144
+  });
+
+  assert.equal(readCount, 1);
+  assert.equal(candidates.length, 1);
+  assert.match(candidates[0].text, /PacketBufferMeta/);
 });
 
 test("WorkspaceContextCache exposes deterministic include completion for diagnostics after cursor", async () => {
@@ -686,8 +751,7 @@ test("InlineCompletionProvider allows automatic completion on blank include-regi
       isIncludeCompletionPosition() {
         return true;
       }
-    },
-    defaults: {}
+    }
   });
 
   assert.equal(provider.canProvide(
@@ -776,6 +840,7 @@ function makeVscode(options = {}) {
       }
     },
     workspace: {
+      textDocuments: options.textDocuments || [],
       workspaceFolders: [
         { uri: makeUri("/repo") }
       ],

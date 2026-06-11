@@ -74,15 +74,23 @@ class WorkspaceContextCache {
 
   async buildSnapshot(document, position, token) {
     const empty = makeEmptySnapshot();
-    if (isCancellationRequested(token) || !this.isContextCacheEnabled()) {
+    if (isCancellationRequested(token)) {
+      return empty;
+    }
+
+    const config = this.readContextConfig();
+    if (!config.contextCacheEnabled) {
       return empty;
     }
 
     try {
       const diagnostics = this.diagnosticsCache.getForDocument(document);
       const nearDiagnostics = this.diagnosticsCache.getNearPosition(document, position, 20, 20);
-      const includeRegion = this.includeAssist.isCursorInIncludeRegion(document, position);
-      const projectProfile = this.isProjectProfileEnabled()
+      const includeAssistEnabled = config.includeAssistEnabled;
+      const includeRegion = includeAssistEnabled
+        ? this.includeAssist.isCursorInIncludeRegion(document, position)
+        : false;
+      const projectProfile = config.projectProfileEnabled
         ? this.projectProfileCache.getForDocument(document)
         : "";
 
@@ -90,15 +98,14 @@ class WorkspaceContextCache {
         return empty;
       }
 
-      const includeAssistEnabled = this.isIncludeAssistEnabled();
-      const missingStandardIncludes = includeAssistEnabled && this.isStandardIncludeAssistEnabled()
+      const missingStandardIncludes = includeAssistEnabled && config.standardIncludeAssistEnabled
         ? this.includeAssist.inferMissingStandardIncludes({
           document,
           diagnostics,
           position
         }).slice(0, 5)
         : [];
-      const missingProjectIncludes = includeAssistEnabled && this.isProjectHeaderAssistEnabled()
+      const missingProjectIncludes = includeAssistEnabled && config.projectHeaderAssistEnabled
         ? this.includeAssist.inferMissingProjectIncludes({
           document,
           diagnostics,
@@ -117,7 +124,7 @@ class WorkspaceContextCache {
       const standardHeaderCandidates = includeAssistEnabled
         ? this.getStandardHeaderCandidates(includeCompletionMode)
         : [];
-      const localHeaderCandidates = includeAssistEnabled && this.isProjectHeaderAssistEnabled()
+      const localHeaderCandidates = includeAssistEnabled && config.projectHeaderAssistEnabled
         ? this.getLocalHeaderCandidates(includeCompletionMode)
         : [];
       const includeCompletion = includeAssistEnabled
@@ -149,7 +156,7 @@ class WorkspaceContextCache {
         promptSections: []
       };
       snapshot.promptSections = this.fimContextBuilder.buildPromptSections(snapshot, {
-        maxInjectedChars: this.getMaxInjectedChars()
+        maxInjectedChars: config.maxInjectedChars
       });
       return snapshot;
     } catch (error) {
@@ -215,16 +222,26 @@ class WorkspaceContextCache {
     return Math.max(200, Math.min(8000, this.getNumberConfig("contextCache.maxInjectedChars", DEFAULT_LIMITS.maxInjectedChars)));
   }
 
+  readContextConfig() {
+    const config = this.getWorkspaceConfiguration();
+    return {
+      contextCacheEnabled: getBooleanConfigValue(config, "contextCache.enabled", true),
+      projectProfileEnabled: getBooleanConfigValue(config, "projectProfile.enabled", true),
+      includeAssistEnabled: getBooleanConfigValue(config, "includeAssist.enabled", true),
+      standardIncludeAssistEnabled: getBooleanConfigValue(config, "includeAssist.standardLibrary.enabled", true),
+      projectHeaderAssistEnabled: getBooleanConfigValue(config, "includeAssist.projectHeaders.enabled", true),
+      maxInjectedChars: Math.max(200, Math.min(8000, getNumberConfigValue(config, "contextCache.maxInjectedChars", DEFAULT_LIMITS.maxInjectedChars)))
+    };
+  }
+
   getBooleanConfig(key, fallback) {
     const config = this.getWorkspaceConfiguration();
-    const value = config && typeof config.get === "function" ? config.get(key) : undefined;
-    return typeof value === "boolean" ? value : fallback;
+    return getBooleanConfigValue(config, key, fallback);
   }
 
   getNumberConfig(key, fallback) {
     const config = this.getWorkspaceConfiguration();
-    const value = config && typeof config.get === "function" ? config.get(key) : undefined;
-    return Number.isFinite(value) ? value : fallback;
+    return getNumberConfigValue(config, key, fallback);
   }
 
   getWorkspaceConfiguration() {
@@ -269,6 +286,16 @@ function makeEmptyIncludeCompletionMode() {
 
 function isCancellationRequested(token) {
   return Boolean(token && token.isCancellationRequested);
+}
+
+function getBooleanConfigValue(config, key, fallback) {
+  const value = config && typeof config.get === "function" ? config.get(key) : undefined;
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function getNumberConfigValue(config, key, fallback) {
+  const value = config && typeof config.get === "function" ? config.get(key) : undefined;
+  return Number.isFinite(value) ? value : fallback;
 }
 
 module.exports = {

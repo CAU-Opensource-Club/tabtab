@@ -1,4 +1,8 @@
 const path = require("path");
+const { collectTopImports, isSymbolLikeLine } = require("../shared/codeHeuristics");
+
+const IMPORT_SCAN_LINES = 220;
+const SYMBOL_LINE_MAX_LENGTH = 220;
 
 const EXCLUDED_SEGMENTS = new Set([
   ".git",
@@ -69,21 +73,26 @@ class RelatedFileSelector {
   }
 
   addOpenDocumentCandidates(candidates, currentDocument, activeWords, config) {
+    const currentUri = currentDocument.uri.toString();
     for (const doc of this.vscode.workspace.textDocuments) {
-      if (!doc || doc.uri.toString() === currentDocument.uri.toString()) {
+      if (!doc || doc.uri.toString() === currentUri) {
         continue;
       }
 
-      if (this.isExcludedDocument(doc, config) || !this.isRelatedDocument(doc, currentDocument, activeWords)) {
+      const text = typeof doc.getText === "function" ? doc.getText() : "";
+      if (
+        this.isExcludedDocument(doc, config, text)
+        || !this.isRelatedDocument(doc, currentDocument, activeWords, text)
+      ) {
         continue;
       }
 
-      const snippet = this.extractRelevantSnippet(doc.getText(), activeWords, undefined, config);
+      const snippet = this.extractRelevantSnippet(text, activeWords, undefined, config);
       if (snippet) {
         candidates.push({
           label: `open file: ${getDisplayPath(doc.uri)}`,
           text: snippet,
-          score: this.scoreDocument(doc, currentDocument, activeWords) + 30
+          score: this.scoreDocument(doc, currentDocument, activeWords, text) + 30
         });
       }
     }
@@ -211,7 +220,7 @@ class RelatedFileSelector {
 
   async executeLsp(command, uri, position, config) {
     try {
-      return await withTimeout(
+      return await resolveEmptyOnTimeout(
         this.vscode.commands.executeCommand(command, uri, position),
         config.lspTimeoutMs
       );
@@ -239,13 +248,12 @@ class RelatedFileSelector {
     }
   }
 
-  isExcludedDocument(document, config) {
+  isExcludedDocument(document, config, text = document && typeof document.getText === "function" ? document.getText() : "") {
     if (!document || !document.uri || this.isExcludedUri(document.uri)) {
       return true;
     }
 
-    const textLength = document.getText().length;
-    return textLength > config.maxRelatedFileBytes || looksGenerated(document.getText().slice(0, 4096));
+    return text.length > config.maxRelatedFileBytes || looksGenerated(text.slice(0, 4096));
   }
 
   isExcludedUri(uri, stat) {
@@ -277,7 +285,7 @@ class RelatedFileSelector {
     return Boolean(ext) && !TEXT_EXTENSIONS.has(ext);
   }
 
-  isRelatedDocument(document, currentDocument, activeWords) {
+  isRelatedDocument(document, currentDocument, activeWords, text = undefined) {
     if (!document || !currentDocument) {
       return false;
     }
@@ -292,11 +300,11 @@ class RelatedFileSelector {
       return true;
     }
 
-    const text = document.getText().slice(0, 12000);
-    return activeWords.some((word) => word.length >= 4 && text.includes(word));
+    const searchableText = String(text === undefined ? document.getText() : text).slice(0, 12000);
+    return activeWords.some((word) => word.length >= 4 && searchableText.includes(word));
   }
 
-  scoreDocument(document, currentDocument, activeWords) {
+  scoreDocument(document, currentDocument, activeWords, text = undefined) {
     let score = 10;
 
     if (document.languageId === currentDocument.languageId) {
@@ -315,9 +323,9 @@ class RelatedFileSelector {
       }
     }
 
-    const text = document.getText().slice(0, 16000);
+    const searchableText = String(text === undefined ? document.getText() : text).slice(0, 16000);
     for (const word of activeWords) {
-      if (word.length >= 4 && text.includes(word)) {
+      if (word.length >= 4 && searchableText.includes(word)) {
         score += 5;
       }
     }
@@ -333,7 +341,7 @@ class RelatedFileSelector {
     const normalized = text.replace(/\r\n/g, "\n");
     const lines = normalized.split("\n");
     const sections = [];
-    const imports = collectTopImports(lines);
+    const imports = collectTopImports(lines, IMPORT_SCAN_LINES);
 
     if (imports) {
       sections.push(imports);
@@ -400,24 +408,11 @@ function getActiveWords(document, position) {
   return [...words];
 }
 
-function collectTopImports(lines) {
-  const imports = [];
-  const importPattern = /^\s*(#\s*(include|import)|import\s|from\s+\S+\s+import\s|using\s+|package\s+|const\s+\w+\s*=\s*require\(|var\s+\w+\s*=\s*require\(|let\s+\w+\s*=\s*require\()/;
-
-  for (const line of lines.slice(0, 220)) {
-    if (importPattern.test(line) || /^\s*#\s*pragma\s+once\b/.test(line)) {
-      imports.push(line);
-    }
-  }
-
-  return imports.join("\n").trim();
-}
-
 function collectSymbolLines(lines, maxLines) {
   const symbols = [];
 
   for (const line of lines) {
-    if (isSymbolLikeLine(line)) {
+    if (isSymbolLikeLine(line, SYMBOL_LINE_MAX_LENGTH)) {
       symbols.push(line);
       if (symbols.length >= maxLines) {
         break;
@@ -426,18 +421,6 @@ function collectSymbolLines(lines, maxLines) {
   }
 
   return symbols.join("\n").trim();
-}
-
-function isSymbolLikeLine(line) {
-  const text = line.trim();
-  if (!text || text.length > 220) {
-    return false;
-  }
-
-  return /^(export\s+)?(async\s+)?function\s+/.test(text)
-    || /^(export\s+)?(class|struct|interface|enum|namespace)\s+/.test(text)
-    || /^(template\s*<.*>\s*)?[\w:<>~*&\s]+\s+[A-Za-z_~][\w:]*\s*\([^;{}]*\)\s*(const\b|noexcept\b|override\b|final\b|->|;|\{)?/.test(text)
-    || /^(const|let|var)\s+[A-Za-z_]\w*\s*=\s*(async\s*)?\(/.test(text);
 }
 
 function sliceLines(lines, start, end) {
@@ -517,7 +500,7 @@ function escapeGlob(value) {
   return String(value).replace(/[\\{}\[\]*?]/g, (match) => `[${match}]`);
 }
 
-function withTimeout(promise, timeoutMs) {
+function resolveEmptyOnTimeout(promise, timeoutMs) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => resolve([]), timeoutMs);
     Promise.resolve(promise)

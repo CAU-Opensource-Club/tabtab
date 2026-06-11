@@ -122,9 +122,10 @@ class LocalHeaderIndex {
     }
 
     const key = uri.toString();
+    const previous = this.fileSymbols.get(key) || [];
     this.fileSymbols.delete(key);
     this.headerFiles.delete(key);
-    this.rebuildSymbolIndex();
+    this.removeSymbolsFromIndex(previous);
   }
 
   lookupSymbol(name) {
@@ -219,8 +220,54 @@ class LocalHeaderIndex {
   }
 
   setFileSymbols(uri, symbols) {
-    this.fileSymbols.set(uri.toString(), symbols || []);
-    this.rebuildSymbolIndex();
+    const key = uri.toString();
+    const previous = this.fileSymbols.get(key) || [];
+    const next = symbols || [];
+
+    this.removeSymbolsFromIndex(previous);
+    this.fileSymbols.set(key, next);
+    this.addSymbolsToIndex(next);
+  }
+
+  addSymbolsToIndex(symbols) {
+    const affectedNames = new Set();
+
+    for (const symbol of symbols) {
+      for (const name of getSymbolIndexNames(symbol)) {
+        if (!this.symbolIndex.has(name)) {
+          this.symbolIndex.set(name, []);
+        }
+        this.symbolIndex.get(name).push(symbol);
+        affectedNames.add(name);
+      }
+    }
+
+    for (const name of affectedNames) {
+      this.symbolIndex.get(name).sort(compareHeaderSymbols);
+    }
+  }
+
+  removeSymbolsFromIndex(symbols) {
+    if (!symbols || !symbols.length) {
+      return;
+    }
+
+    const removed = new Set(symbols);
+    for (const symbol of symbols) {
+      for (const name of getSymbolIndexNames(symbol)) {
+        const entries = this.symbolIndex.get(name);
+        if (!entries) {
+          continue;
+        }
+
+        const remaining = entries.filter((entry) => !removed.has(entry));
+        if (remaining.length) {
+          this.symbolIndex.set(name, remaining);
+        } else {
+          this.symbolIndex.delete(name);
+        }
+      }
+    }
   }
 
   rebuildSymbolIndex() {
@@ -228,8 +275,7 @@ class LocalHeaderIndex {
 
     for (const symbols of this.fileSymbols.values()) {
       for (const symbol of symbols) {
-        const names = [symbol.name, symbol.qualifiedName].filter(Boolean);
-        for (const name of names) {
+        for (const name of getSymbolIndexNames(symbol)) {
           if (!next.has(name)) {
             next.set(name, []);
           }
@@ -446,6 +492,19 @@ function makeHeaderSymbol({ name, namespaces, kind, uri, includeText, line, conf
     line,
     confidence
   };
+}
+
+function getSymbolIndexNames(symbol) {
+  const name = symbol && symbol.name;
+  const qualifiedName = symbol && symbol.qualifiedName;
+
+  if (!name) {
+    return qualifiedName ? [qualifiedName] : [];
+  }
+
+  return qualifiedName && qualifiedName !== name
+    ? [name, qualifiedName]
+    : [name];
 }
 
 function isIndexableSymbolKind(kind, kinds) {

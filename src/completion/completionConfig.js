@@ -16,7 +16,7 @@ const DEFAULT_COMPLETION_CONFIG = {
   sendThinkingDisabled: true
 };
 
-class Config {
+class CompletionConfig {
   constructor(values) {
     Object.assign(this, values);
   }
@@ -32,7 +32,7 @@ class Config {
       ? getNumber(workspaceConfig, "manualMaxOutputTokens", Math.max(DEFAULT_COMPLETION_CONFIG.manualMaxOutputTokens, legacyMaxTokens))
       : getNumber(workspaceConfig, "maxOutputTokens", legacyMaxTokens);
 
-    return new Config({
+    return new CompletionConfig({
       enabled: getBoolean(workspaceConfig, "enabled", true),
       isManual,
       debounceMs: getNumber(workspaceConfig, "debounceMs", DEFAULT_COMPLETION_CONFIG.debounceMs),
@@ -65,6 +65,6 @@ function getBoolean(config, key, fallback) {
 }
 
 module.exports = {
-  Config,
+  CompletionConfig,
   DEFAULT_COMPLETION_CONFIG
 };

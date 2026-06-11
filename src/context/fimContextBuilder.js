@@ -1,3 +1,5 @@
+const { sanitizeSingleLine } = require("../shared/textUtils");
+
 const DEFAULT_LIMITS = {
   maxInjectedChars: 1200,
   maxStandardIncludes: 5,
@@ -113,13 +115,6 @@ function hasMissingIncludeHints(snapshot) {
     (snapshot.missingStandardIncludes && snapshot.missingStandardIncludes.length)
     || (snapshot.missingProjectIncludes && snapshot.missingProjectIncludes.length)
   );
-}
-
-function sanitizeSingleLine(value) {
-  return String(value || "")
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 module.exports = {

@@ -1,4 +1,8 @@
+const { PROMPT_TAG_NAMES } = require("../api/fimPrompt");
+const { normalizeNewlines } = require("../shared/textUtils");
 const { looksLikeCompleteStatementEnd } = require("./completionContextRules");
+
+const PROMPT_TAG_PATTERN = new RegExp(`</?(${PROMPT_TAG_NAMES.join("|")})>`, "gi");
 
 class CompletionPostProcessor {
   process({ raw, context, config }) {
@@ -43,7 +47,7 @@ function stripCodeFences(text) {
 
 function stripFimTags(text) {
   return text
-    .replace(/<\/?(fim_prefix|fim_suffix|project_profile|workspace_strategy|metadata|diagnostics_context|extra_context|before_cursor|after_cursor|cursor)>/gi, "")
+    .replace(PROMPT_TAG_PATTERN, "")
     .replace(/<\|fim_middle\|>|<\|fim_suffix\|>|<\|fim_prefix\|>/gi, "");
 }
 
@@ -343,10 +347,6 @@ function head(text, maxLength) {
 function tail(text, maxLength) {
   const value = String(text || "");
   return value.slice(Math.max(0, value.length - maxLength));
-}
-
-function normalizeNewlines(text) {
-  return String(text || "").replace(/\r\n/g, "\n");
 }
 
 module.exports = {

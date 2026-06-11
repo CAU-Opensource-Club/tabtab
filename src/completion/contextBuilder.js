@@ -1,5 +1,10 @@
 const path = require("path");
+const { collectTopImports, isSymbolLikeLine } = require("../shared/codeHeuristics");
+const { normalizeNewlines } = require("../shared/textUtils");
 const { TokenBudgeter } = require("./tokenBudgeter");
+
+const IMPORT_SCAN_LINES = 260;
+const SYMBOL_LINE_MAX_LENGTH = 240;
 
 class ContextBuilder {
   constructor({ relatedFileSelector }) {
@@ -8,13 +13,13 @@ class ContextBuilder {
 
   async build({ document, position, token, config }) {
     const budgeter = new TokenBudgeter({ maxPromptTokens: config.maxPromptTokens });
-    const text = normalizeText(document.getText());
+    const text = normalizeNewlines(document.getText());
     const cursorOffset = document.offsetAt(position);
     const lines = text.split("\n");
     const cursorLine = lines[position.line] || "";
     const cursorComment = detectCursorComment(text, cursorOffset);
     const prefixParts = {
-      imports: collectTopImports(lines),
+      imports: collectTopImports(lines, IMPORT_SCAN_LINES),
       scope: collectCurrentScope(lines, position.line),
       adjacent: collectAdjacentSymbols(lines, position.line),
       local: text.slice(0, cursorOffset)
@@ -52,19 +57,6 @@ class ContextBuilder {
       }
     };
   }
-}
-
-function collectTopImports(lines) {
-  const imports = [];
-  const importPattern = /^\s*(#\s*(include|import)|import\s|from\s+\S+\s+import\s|using\s+|package\s+|const\s+\w+\s*=\s*require\(|var\s+\w+\s*=\s*require\(|let\s+\w+\s*=\s*require\()/;
-
-  for (const line of lines.slice(0, 260)) {
-    if (importPattern.test(line) || /^\s*#\s*pragma\s+once\b/.test(line)) {
-      imports.push(line);
-    }
-  }
-
-  return imports.join("\n").trim();
 }
 
 function collectCurrentScope(lines, cursorLine) {
@@ -130,7 +122,7 @@ function collectAdjacentSymbols(lines, cursorLine) {
     }
 
     const line = lines[index] || "";
-    if (isSymbolLikeLine(line)) {
+    if (isSymbolLikeLine(line, SYMBOL_LINE_MAX_LENGTH)) {
       symbols.push(line);
     }
   }
@@ -204,7 +196,7 @@ function collectNextSignatures(lines, cursorLine) {
 
   for (let index = cursorLine + 1; index < Math.min(lines.length, cursorLine + 260); index += 1) {
     const line = lines[index] || "";
-    if (isSymbolLikeLine(line)) {
+    if (isSymbolLikeLine(line, SYMBOL_LINE_MAX_LENGTH)) {
       signatures.push(line);
       if (signatures.length >= 6) {
         break;
@@ -213,18 +205,6 @@ function collectNextSignatures(lines, cursorLine) {
   }
 
   return signatures.join("\n").trim();
-}
-
-function isSymbolLikeLine(line) {
-  const text = line.trim();
-  if (!text || text.length > 240) {
-    return false;
-  }
-
-  return /^(export\s+)?(async\s+)?function\s+/.test(text)
-    || /^(export\s+)?(class|struct|interface|enum|namespace)\s+/.test(text)
-    || /^(template\s*<.*>\s*)?[\w:<>~*&\s]+\s+[A-Za-z_~][\w:]*\s*\([^;{}]*\)\s*(const\b|noexcept\b|override\b|final\b|->|;|\{)?/.test(text)
-    || /^(const|let|var)\s+[A-Za-z_]\w*\s*=\s*(async\s*)?\(/.test(text);
 }
 
 function stripLineComment(line) {
@@ -347,10 +327,6 @@ function detectCursorComment(text, cursorOffset) {
       inside: false,
       kind: ""
     };
-}
-
-function normalizeText(text) {
-  return typeof text === "string" ? text.replace(/\r\n/g, "\n") : "";
 }
 
 module.exports = {

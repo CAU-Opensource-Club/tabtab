@@ -1,9 +1,10 @@
-const { Config } = require("./config");
-const { ContextBuilder } = require("./contextBuilder");
-const { RelatedFileSelector } = require("./relatedFileSelector");
-const { FimClient } = require("./fimClient");
+const { FimClient } = require("../api/fimClient");
+const { createControllerToken, delay, withTimeout } = require("../shared/asyncUtils");
+const { CompletionConfig } = require("./completionConfig");
 const { CompletionPostProcessor } = require("./completionPostProcessor");
 const { looksLikeCompleteStatementEnd } = require("./completionContextRules");
+const { ContextBuilder } = require("./contextBuilder");
+const { RelatedFileSelector } = require("./relatedFileSelector");
 
 const INLINE_SUGGEST_TRIGGER_COMMAND = "editor.action.inlineSuggest.trigger";
 const IDLE_TRIGGER_PENDING_MS = 2000;
@@ -31,8 +32,7 @@ class InlineCompletionProvider {
       relatedFileSelector: this.relatedFileSelector
     });
     this.fimClient = new FimClient({
-      output: this.output,
-      ...options.defaults
+      output: this.output
     });
     this.postProcessor = new CompletionPostProcessor();
 
@@ -91,7 +91,7 @@ class InlineCompletionProvider {
       ? { triggerKind: this.vscode.InlineCompletionTriggerKind.Automatic }
       : inlineContext;
     const workspaceConfig = this.vscode.workspace.getConfiguration("tabtab");
-    const config = Config.fromWorkspace(workspaceConfig, effectiveInlineContext, this.vscode);
+    const config = CompletionConfig.fromWorkspace(workspaceConfig, effectiveInlineContext, this.vscode);
     config.skipDebounce = idleTriggered;
 
     if (!this.canProvide(document, position, effectiveInlineContext, token, config)) {
@@ -436,7 +436,7 @@ class InlineCompletionProvider {
   }
 
   readAutomaticConfig() {
-    return Config.fromWorkspace(
+    return CompletionConfig.fromWorkspace(
       this.vscode.workspace.getConfiguration("tabtab"),
       { triggerKind: this.vscode.InlineCompletionTriggerKind.Automatic },
       this.vscode
@@ -480,100 +480,6 @@ function makeEditorSnapshot(editor) {
     positionLine: editor.selection.active.line,
     positionCharacter: editor.selection.active.character
   };
-}
-
-function createControllerToken(controller) {
-  return {
-    get isCancellationRequested() {
-      return controller.signal.aborted;
-    },
-    onCancellationRequested(callback) {
-      if (controller.signal.aborted) {
-        callback();
-        return { dispose() {} };
-      }
-
-      controller.signal.addEventListener("abort", callback, { once: true });
-      return {
-        dispose() {
-          controller.signal.removeEventListener("abort", callback);
-        }
-      };
-    }
-  };
-}
-
-function delay(ms, token, signal) {
-  if (!ms || ms <= 0) {
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve, reject) => {
-    let finished = false;
-    const cleanup = [];
-    const finish = (callback, value) => {
-      if (finished) {
-        return;
-      }
-
-      finished = true;
-      clearTimeout(timeout);
-      for (const dispose of cleanup) {
-        dispose();
-      }
-      callback(value);
-    };
-    const timeout = setTimeout(() => finish(resolve), ms);
-    const cancel = () => {
-      finish(reject, new Error("cancelled"));
-    };
-
-    if (token && token.isCancellationRequested) {
-      cancel();
-      return;
-    }
-
-    if (token && typeof token.onCancellationRequested === "function") {
-      const disposable = token.onCancellationRequested(cancel);
-      cleanup.push(() => disposable.dispose());
-    }
-
-    if (signal) {
-      if (signal.aborted) {
-        cancel();
-        return;
-      }
-
-      const listener = cancel;
-      signal.addEventListener("abort", listener, { once: true });
-      cleanup.push(() => signal.removeEventListener("abort", listener));
-    }
-  });
-}
-
-function withTimeout(promise, timeoutMs, controller) {
-  if (!timeoutMs || timeoutMs <= 0) {
-    return promise;
-  }
-
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      if (controller) {
-        controller.abort();
-      }
-      reject(new Error("cancelled"));
-    }, timeoutMs);
-
-    Promise.resolve(promise)
-      .then((value) => {
-        clearTimeout(timeout);
-        resolve(value);
-      })
-      .catch((error) => {
-        clearTimeout(timeout);
-        reject(error);
-      });
-  });
 }
 
 module.exports = {
