@@ -763,6 +763,64 @@ test("InlineCompletionProvider allows automatic completion on blank include-regi
   ), true);
 });
 
+test("InlineCompletionProvider skips remote FIM when FIM is disabled", async () => {
+  const text = "const value = ";
+  const document = makeDocument({
+    text,
+    languageId: "javascript"
+  });
+  const position = { line: 0, character: text.length };
+  const vscode = makeVscode({
+    activeTextEditor: {
+      document,
+      selection: {
+        isEmpty: true,
+        active: position
+      }
+    }
+  });
+  const provider = new InlineCompletionProvider({
+    vscode,
+    output: makeOutput(),
+    readRuntimeConfig() {
+      return {
+        apiKey: "key",
+        fimEnabled: false
+      };
+    },
+    workspaceContextCache: {
+      async buildSnapshot() {
+        return { promptSections: [] };
+      }
+    }
+  });
+  let contextBuilderCalled = false;
+  let fimClientCalled = false;
+  provider.contextBuilder = {
+    async build() {
+      contextBuilderCalled = true;
+      return {};
+    }
+  };
+  provider.fimClient = {
+    async complete() {
+      fimClientCalled = true;
+      return "completion";
+    }
+  };
+
+  const result = await provider.provideInlineCompletionItems(
+    document,
+    position,
+    { triggerKind: vscode.InlineCompletionTriggerKind.Invoke },
+    { isCancellationRequested: false }
+  );
+
+  assert.equal(result, undefined);
+  assert.equal(contextBuilderCalled, false);
+  assert.equal(fimClientCalled, false);
+});
+
 function makeVscode(options = {}) {
   const diagnostics = options.diagnostics || new Map();
   const configValues = {

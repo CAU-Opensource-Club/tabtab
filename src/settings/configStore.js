@@ -136,6 +136,9 @@ class ConfigStore {
       baseUrl: getConfigString(config.baseUrl) || workspaceConfig.get("baseUrl", getDefaultBaseUrl(provider)),
       model: getConfigString(config.model) || workspaceConfig.get("model", getDefaultModel(provider)),
       apiKey,
+      fimEnabled: typeof config.fimEnabled === "boolean"
+        ? config.fimEnabled
+        : getWorkspaceBoolean(workspaceConfig, "fimEnabled", true),
       systemPrompt: getPromptString(systemPrompt) || workspaceConfig.get("systemPrompt", DEFAULT_SYSTEM_PROMPT),
       projectProfile: getProjectProfileConfig(config, workspaceConfig)
     };
@@ -167,6 +170,7 @@ function shouldNormalizeConfig(config) {
     || typeof config.baseUrl !== "string"
     || typeof config.model !== "string"
     || typeof config.apiKey !== "string"
+    || typeof config.fimEnabled !== "boolean"
     || !isProjectProfileConfig(config.projectProfile)
     || Object.prototype.hasOwnProperty.call(config, "systemPrompt")
     || Object.prototype.hasOwnProperty.call(config, "deepseekApiKey");
@@ -224,6 +228,13 @@ function getConfigString(value) {
 
 function getPromptString(value) {
   return typeof value === "string" ? stripBom(value).replace(/\r\n/g, "\n").trim() : "";
+}
+
+function getWorkspaceBoolean(workspaceConfig, key, fallback) {
+  const value = workspaceConfig && typeof workspaceConfig.get === "function"
+    ? workspaceConfig.get(key, fallback)
+    : fallback;
+  return typeof value === "boolean" ? value : fallback;
 }
 
 module.exports = {

@@ -98,6 +98,7 @@ class TabTabSettingsViewProvider {
         baseUrl: config.baseUrl,
         model: config.model,
         apiKey: config.apiKey,
+        fimEnabled: config.fimEnabled,
         systemPrompt: config.systemPrompt
       },
       projectProfile,
@@ -167,6 +168,7 @@ class TabTabSettingsViewProvider {
       baseUrl,
       model,
       apiKey,
+      fimEnabled: values.fimEnabled !== false,
       systemPrompt
     });
     await this.updateProjectProfileSettings(values, {

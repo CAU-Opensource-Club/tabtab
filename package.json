@@ -77,6 +77,11 @@
           "default": true,
           "description": "Enable TabTab inline code completion."
         },
+        "tabtab.fimEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable remote FIM completions."
+        },
         "tabtab.maxTokens": {
           "type": "number",
           "default": 128,

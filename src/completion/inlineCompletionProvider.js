@@ -165,7 +165,16 @@ class InlineCompletionProvider {
       }
 
       const runtimeConfig = await this.readRuntimeConfig();
-      if (!runtimeConfig || !runtimeConfig.apiKey) {
+      if (!runtimeConfig) {
+        this.logError("Missing API key. Set apiKey in tabtab.config.json.");
+        return undefined;
+      }
+
+      if (runtimeConfig.fimEnabled === false) {
+        return undefined;
+      }
+
+      if (!runtimeConfig.apiKey) {
         this.logError("Missing API key. Set apiKey in tabtab.config.json.");
         return undefined;
       }

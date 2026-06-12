@@ -143,6 +143,11 @@ function renderSettingsViewHtml({ cspSource }) {
       <input id="apiKey" type="password" spellcheck="false" autocomplete="off">
     </label>
 
+    <label class="checkbox-label">
+      <input id="fimEnabled" type="checkbox">
+      <span>Enable FIM</span>
+    </label>
+
     <label>
       System Prompt
       <textarea id="systemPrompt" spellcheck="false" required></textarea>
@@ -177,6 +182,7 @@ function renderSettingsViewHtml({ cspSource }) {
     const baseUrl = document.getElementById("baseUrl");
     const model = document.getElementById("model");
     const apiKey = document.getElementById("apiKey");
+    const fimEnabled = document.getElementById("fimEnabled");
     const systemPrompt = document.getElementById("systemPrompt");
     const projectProfileEnabled = document.getElementById("projectProfileEnabled");
     const projectProfileManualProfile = document.getElementById("projectProfileManualProfile");
@@ -211,6 +217,7 @@ function renderSettingsViewHtml({ cspSource }) {
       baseUrl.value = message.settings.baseUrl || "";
       model.value = message.settings.model || "";
       apiKey.value = message.settings.apiKey || "";
+      fimEnabled.checked = message.settings.fimEnabled !== false;
       systemPrompt.value = message.settings.systemPrompt || "";
       applyProjectProfileState(message.projectProfile || {});
       defaultBaseUrl = message.defaults.baseUrl || "";
@@ -256,11 +263,18 @@ function renderSettingsViewHtml({ cspSource }) {
           baseUrl: baseUrl.value,
           model: model.value,
           apiKey: apiKey.value,
+          fimEnabled: fimEnabled.checked,
           systemPrompt: systemPrompt.value,
           projectProfileEnabled: projectProfileEnabled.checked,
           projectProfileManualProfile: projectProfileManualProfile.value
         }
       });
+    });
+
+    fimEnabled.addEventListener("change", () => {
+      status.textContent = fimEnabled.checked
+        ? "FIM enabled. Save to persist."
+        : "FIM disabled. Save to persist.";
     });
 
     resetPrompt.addEventListener("click", () => {
